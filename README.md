@@ -21,7 +21,12 @@ pip install filtersql
 ## Quick start
 
 ```python
-from filtersql import Datasource
+import filtersql
+
+ds = filtersql.Datasource(
+    source = 'sample_uk',
+    dbms   = 'Pg',
+)
 
 columns = [
     {'field': 'id'},
@@ -35,13 +40,8 @@ filters = [
     {'field': 'last_name',  'operator': 'icontains', 'value': 'Smith'},
 ]
 
-q = Datasource(
-    source  = 'sample_uk',
+query, values = ds.select(
     columns = columns,
-    dbms    = 'Pg',
-)
-
-query, values = q.select(
     filters = filters,
     order   = [{'field': 'first_name', 'order': 'asc'}],
     limit   = {'start': 0, 'length': 10},
@@ -69,6 +69,81 @@ rows = execute_db(query, values)
 
 ---
 
+## Filters
+
+### AND filters (default)
+
+A flat list of filters is joined with AND:
+
+```python
+filters = [
+    {'field': 'status',   'operator': '=',         'value': 'active'},
+    {'field': 'doc_date', 'operator': '>=',        'value': '2025-01-01'},
+    {'field': 'title',    'operator': 'icontains', 'value': 'oxygen'},
+]
+# -> status='active' AND doc_date>='2025-01-01' AND title ILIKE '%oxygen%'
+```
+
+`between` takes a list of two values:
+
+```python
+{'field': 'doc_date', 'operator': 'between', 'value': ['2025-01-01', '2025-12-31']}
+# -> doc_date between '2025-01-01' and '2025-12-31'
+```
+
+### OR groups
+
+Wrap filters in a dict with an `'or'` key to join them with OR:
+
+```python
+filters = [
+    {'field': 'status', 'operator': '=', 'value': 'active'},
+    {'or': [
+        {'field': 'first_name', 'operator': 'icontains', 'value': 'john'},
+        {'field': 'last_name',  'operator': 'icontains', 'value': 'john'},
+    ]},
+]
+# -> status='active' AND (first_name ILIKE '%john%' OR last_name ILIKE '%john%')
+```
+
+### Nesting
+
+OR groups can contain AND groups and vice versa:
+
+```python
+filters = [
+    {'or': [
+        {'field': 'doc_type', 'operator': '=', 'value': 'CONTRACT'},
+        {'and': [
+            {'field': 'doc_type', 'operator': '=',   'value': 'ORDER'},
+            {'field': 'amount',   'operator': '>=',  'value': '10000'},
+        ]},
+    ]},
+]
+# -> (doc_type='CONTRACT' OR (doc_type='ORDER' AND amount>=10000))
+```
+
+### base_filters
+
+Filters set on the `Datasource` object are always applied to every query — useful for tenant isolation, soft-delete, or user scoping:
+
+```python
+ds = filtersql.Datasource(
+    source       = 'documents',
+    dbms         = 'Pg',
+    placeholder  = '%s',
+    base_filters = [
+        {'field': 'tenant_id', 'operator': '=', 'value': current_tenant_id},
+        {'field': 'deleted',   'operator': '=', 'value': False},
+    ],
+)
+
+# tenant_id and deleted filters are always added, whatever you pass to select()
+query, values = ds.select(columns=columns, filters=user_filters)
+```
+
+---
+
 ## Using filtersql with AI / LLM pipelines
 
 The idea is simple: the LLM parses the user question and returns a JSON with the filters, Pydantic validates the structure, and filtersql builds the SQL. The values are always passed as parameters so there is no risk of SQL injection even if the model produces unexpected output.
@@ -76,7 +151,7 @@ The idea is simple: the LLM parses the user question and returns a JSON with the
 ### Basic flow
 
 ```
-user question → LLM → JSON → Pydantic → filtersql → parameterized SQL
+user question -> LLM -> JSON -> Pydantic -> filtersql -> parameterized SQL
 ```
 
 ### Define the Pydantic schema
@@ -93,8 +168,8 @@ class SQLFilterSchema(BaseModel):
         'doc_date',
         'author',
         'title',
-        'attributes->>supplier',   # JSONB path
-        'attributes->>amount',     # JSONB path
+        'attributes->>supplier',
+        'attributes->>amount',
     ] = Field(description="Column name or JSONB path")
     operator: Literal[
         '=', '!=', '>', '>=', '<', '<=',
@@ -127,34 +202,32 @@ parsed = QuerySchema.model_validate_json(ai_response.text)
 ### Build the WHERE clause
 
 ```python
-from filtersql import Datasource
+import filtersql
 
 filters = [f.model_dump() for f in parsed.sql_filters]
 
-ds = Datasource(
+ds = filtersql.Datasource(
     source      = 'documents',
-    columns     = columns,
     dbms        = 'Pg',
     placeholder = '%s',
-    filters     = filters,
 )
 
-# if you need only the WHERE part to append to your own query:
-where_clause, values = ds.where()
-# → " and ("doc_type"=%s and "doc_date">=%s and "doc_date"<=%s)"
-# → ['CONTRACT', '2025-01-01', '2025-12-31']
+# only the WHERE part, to append to your own query:
+where_clause, values = ds.where(filters=filters)
+# -> " and ("doc_type"=%s and "doc_date">=%s and "doc_date"<=%s)"
+# -> ['CONTRACT', '2025-01-01', '2025-12-31']
 
 # or the full SELECT:
-query, values = ds.select()
+query, values = ds.select(columns=columns, filters=filters)
 ```
 
 ### A few things that help in practice
 
 **Pass the current date in the prompt.** If you don't, the model tends to guess on things like "this year" or "recent documents" and gets it wrong.
 
-**Give explicit value mappings.** For example tell the model that "contract" must become `doc_type = 'DB_CONTRACT'` exactly. Free-form values produce inconsistent filters.
+**Give explicit value mappings.** Tell the model that "contract" must become `doc_type = 'DB_CONTRACT'` exactly. Free-form values produce inconsistent filters.
 
-**Separate semantic from deterministic.** Ask the model to put dates, document types and identifiers in `sql_filters`, and leave the conceptual topic in `semantic_query` for vector or full-text search. Mixing them in the embedding adds noise.
+**Separate semantic from deterministic.** Ask the model to put dates, document types and identifiers in `sql_filters`, and leave the conceptual topic in `semantic_query` for vector or full-text search.
 
 **Always add a fallback.** If the LLM call fails, fall back to empty filters and use the raw question for semantic search.
 
@@ -167,24 +240,24 @@ except Exception:
 
 ### JSONB fields and value_type
 
-When a JSONB field contains numeric or date values, you need to tell Postgres the type explicitly or it will compare as text. Add `value_type` to the filter:
+When a JSONB field contains numeric or date values, add `value_type` to get the right Postgres cast:
 
 ```python
-{'field': 'attributes->>amount', 'operator': '>=', 'value': '10000', 'value_type': 'numeric'}
-# → ("attributes"->>'amount')::numeric >= %s::numeric
+{'field': 'attributes->>amount',      'operator': '>=', 'value': '10000',     'value_type': 'numeric'}
+# -> ("attributes"->>'amount')::numeric >= %s::numeric
 
 {'field': 'attributes->>expiry_date', 'operator': '<=', 'value': '2025-12-31', 'value_type': 'date'}
-# → ("attributes"->>'expiry_date')::date <= %s::date
+# -> ("attributes"->>'expiry_date')::date <= %s::date
 ```
 
-Without the cast, `'9' > '10'` in Postgres text comparison, which gives wrong results for numeric ranges.
+Without the cast, `'9' > '10'` in Postgres text comparison gives wrong results for numeric ranges.
 
 ---
 
 ## Flask + DataTables example
 
 ```python
-from filtersql import Datasource
+import filtersql
 from filtersql.utils import parseDatatableArgs
 
 @app.route("/api/table.json")
@@ -215,20 +288,20 @@ def table_json():
         for k in a['order'].values()
     ]
 
-    q = Datasource(
+    ds = filtersql.Datasource(
         source      = 'sample_uk',
-        columns     = columns,
         dbms        = 'SQLite',
         placeholder = '?',
     )
 
-    query, values = q.select()
+    query, values = ds.select(columns=columns)
     records_total = execute_db("select count(*) from ({}) t".format(query), values)[0][0]
 
-    query, values = q.select(filters=filters)
+    query, values = ds.select(columns=columns, filters=filters)
     records_filtered = execute_db("select count(*) from ({}) t".format(query), values)[0][0]
 
-    query, values = q.select(
+    query, values = ds.select(
+        columns = columns,
         filters = filters,
         order   = order,
         limit   = {'start': int(request.args.get('start')), 'length': int(request.args.get('length'))},
@@ -250,19 +323,18 @@ def table_json():
 Cursor-based pagination without offset. Useful for large tables where `LIMIT x OFFSET y` gets slow, or when you need to navigate record by record like in Microsoft Access.
 
 ```python
-q = Datasource(
-    source  = 'sample_uk',
-    columns = columns,
-    order   = [{'field': 'id', 'order': 'asc'}],
-    dbms    = 'SQLite',
-    move    = 'forwards',
-    filters = [{'field': 'id', 'value': last_seen_id, 'type': 'move'}],
+ds = filtersql.Datasource(
+    source = 'sample_uk',
+    dbms   = 'SQLite',
+    move   = 'forwards',
+    order  = [{'field': 'id', 'order': 'asc'}],
+    base_filters = [{'field': 'id', 'value': last_seen_id, 'type': 'move'}],
 )
 
-query, values = q.select()
+query, values = ds.select(columns=columns)
 ```
 
-Use `move='backwards'` to go in reverse, or `move='find'` to jump to a specific record. Multi-column cursors are supported - just add more entries to `filters` with `type='move'`.
+Use `move='backwards'` to go in reverse, or `move='find'` to jump to a specific record. Multi-column cursors are supported — just add more entries to `base_filters` with `type='move'`.
 
 ---
 
@@ -270,21 +342,21 @@ Use `move='backwards'` to go in reverse, or `move='find'` to jump to a specific 
 
 Two operators for full-text search with `websearch_to_tsquery`:
 
-`fts` - for a pre-built `tsvector` column:
+`fts` — for a pre-built `tsvector` column:
 ```python
 {'field': 'tsv_content', 'operator': 'fts', 'value': 'oxygen supply'}
-# → "tsv_content" @@ websearch_to_tsquery('italian', %s)
+# -> "tsv_content" @@ websearch_to_tsquery('italian', %s)
 ```
 
-`fts_query` - builds the tsvector on the fly from a text column:
+`fts_query` — builds the tsvector on the fly from a text column:
 ```python
 {'field': 'description', 'operator': 'fts_query', 'value': 'oxygen supply'}
-# → to_tsvector('italian', coalesce("description", '')) @@ websearch_to_tsquery('italian', %s)
+# -> to_tsvector('italian', coalesce("description", '')) @@ websearch_to_tsquery('italian', %s)
 ```
 
 Default language is `italian`. You can change it:
 ```python
-q = Datasource(..., fts_language='english')
+ds = filtersql.Datasource(..., fts_language='english')
 ```
 
 ---
@@ -294,15 +366,21 @@ q = Datasource(..., fts_language='english')
 | Operator | Description |
 |---|---|
 | `=` `!=` `>` `>=` `<` `<=` | Comparison |
+| `between` | Range — value must be a list of two items `[low, high]` |
 | `contains` | Case-sensitive substring (`LIKE '%x%'`) |
 | `starts_with` | Case-sensitive prefix |
 | `ends_with` | Case-sensitive suffix |
+| `not_contains` | Case-sensitive substring exclusion |
+| `not_starts_with` | Case-sensitive prefix exclusion |
 | `icontains` | Case-insensitive substring (`ILIKE`) |
 | `istarts_with` | Case-insensitive prefix |
 | `iends_with` | Case-insensitive suffix |
+| `not_icontains` | Case-insensitive substring exclusion |
 | `null` / `notnull` | NULL checks (no value bound) |
 | `in` / `notin` | List membership |
-| `reverse_in` | Value in a set of columns - `%s IN (col1, col2)` |
+| `reverse_in` | Value in a set of columns — `%s IN (col1, col2)` |
+| `regexp` | Case-sensitive regular expression |
+| `iregexp` | Case-insensitive regular expression (Pg: `~*`, Oracle: `regexp_like` with `i`) |
 | `fts` | Full-text search on tsvector column (Pg only) |
 | `fts_query` | Full-text search on text column (Pg only) |
 

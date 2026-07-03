@@ -20,8 +20,13 @@ DBMS_MAP = {
             'in':           '{} in ({})',
             'notin':        '{} not in ({})',
             'reverse_in':   '{} in ({})',
-            'null':         '{} is null',
-            'notnull':      '{} is not null',
+            'null':            '{} is null',
+            'notnull':         '{} is not null',
+            'between':         '{} between ? and ?',
+            'not_starts_with': '{} not glob ? || '*'',
+            'not_contains':    '{} not glob '*' || ? || '*'',
+            'not_icontains':   '{} not like '%' || ? || '%'',
+            'regexp':          '{} regexp ?',
         },
         "limit":  'limit {0}, {1}',
     },
@@ -46,8 +51,14 @@ DBMS_MAP = {
             'reverse_in':   '{} in ({})',
             'null':         '{} is null',
             'notnull':      '{} is not null',
-            'fts':          "{} @@ websearch_to_tsquery('italian', ?)",
-            'fts_query':    "to_tsvector('italian', coalesce({}, '')) @@ websearch_to_tsquery('italian', ?)",
+            'fts':             "{} @@ websearch_to_tsquery('italian', ?)",
+            'fts_query':       "to_tsvector('italian', coalesce({}, '')) @@ websearch_to_tsquery('italian', ?)",
+            'between':         '{} between ? and ?',
+            'not_starts_with': '{} not like ? || '%'',
+            'not_contains':    '{} not like '%' || ? || '%'',
+            'not_icontains':   '{} not ilike '%' || ? || '%'',
+            'regexp':          '{} ~ ?',
+            'iregexp':         '{} ~* ?',
         },
         "limit": 'limit {1} offset {0}',
     },
@@ -70,8 +81,14 @@ DBMS_MAP = {
             'in':           '{} in ({})',
             'notin':        '{} not in ({})',
             'reverse_in':   '{} in ({})',
-            'null':         '{} is null',
-            'notnull':      '{} is not null',
+            'null':            '{} is null',
+            'notnull':         '{} is not null',
+            'between':         '{} between ? and ?',
+            'not_starts_with': '{} not like binary concat(?, '%')',
+            'not_contains':    '{} not like binary concat('%', ?, '%')',
+            'not_icontains':   '{} not like concat('%', ?, '%')',
+            'regexp':          '{} regexp ?',
+            'iregexp':         '{} regexp ?',
         },
         "limit": 'limit {0}, {1}',
     },
@@ -94,8 +111,14 @@ DBMS_MAP = {
             'in':           '{} in ({})',
             'notin':        '{} not in ({})',
             'reverse_in':   '{} in ({})',
-            'null':         '{} is null',
-            'notnull':      '{} is not null',
+            'null':            '{} is null',
+            'notnull':         '{} is not null',
+            'between':         '{} between ? and ?',
+            'not_starts_with': '{} not like ? || '%'',
+            'not_contains':    '{} not like '%' || ? || '%'',
+            'not_icontains':   'not regexp_like({}, ?, 'i')',
+            'regexp':          'regexp_like({}, ?)',
+            'iregexp':         'regexp_like({}, ?, 'i')',
         },
         "top": ' {columns} from (select qqq.*, rownum rrr from (select ',
         "limit": ') qqq where rownum <= {2}) where rrr>{0}',
@@ -105,28 +128,23 @@ DBMS_MAP = {
 class Datasource:
     """
     filtersql Class
-    Sql queries for DataTables, LLM outputs and any other Frontend application
+    Sql queries for AI, DataTables, LLM outputs and any other Frontend application
     """
 
     def __init__(self, **kwargs):
-        self.source = kwargs.get('source', None)
-        self.raw_source = kwargs.get('raw_source', False)
+        self.source       = kwargs.get('source', None)
+        self.raw_source   = kwargs.get('raw_source', False)
 
-        self.columns = kwargs.get('columns', None)
-        self.order = kwargs.get('order', [])
-        self.filters = kwargs.get('filters', [])
+        # base_filters: always applied to every query on this datasource.
+        # Use for tenant isolation, soft-delete, user scoping etc.
+        # Dynamic per-call filters are passed to select() / where().
+        self.base_filters = kwargs.get('base_filters', [])
 
-        # --- backwards compatibility, to be removed
-        #self.columns = self.__shim_legacy_json(kwargs.get('columns', None))
-        #self.order = self.__shim_legacy_json(kwargs.get('order', []))
-        #self.filters = self.__shim_legacy_json(kwargs.get('filters', []))
-        # ---
-
-        self.limit = kwargs.get('limit', None)
-        self.dbms = kwargs.get('dbms', None)
-        self.move = kwargs.get('move', 'search')
-        self.placeholder = kwargs.get('placeholder', '?')
-
+        self.order        = kwargs.get('order', [])
+        self.limit        = kwargs.get('limit', None)
+        self.dbms         = kwargs.get('dbms', None)
+        self.move         = kwargs.get('move', 'search')
+        self.placeholder  = kwargs.get('placeholder', '?')
         self.fts_language = kwargs.get('fts_language', 'italian')
 
         if self.dbms not in DBMS_MAP:
@@ -187,6 +205,14 @@ class Datasource:
 
             placeholders_str = ", ".join([self.placeholder] * len(search_value))
             raw_statement = raw_statement.format("{}", placeholders_str)
+
+        elif searchcriteria == 'between':
+            # value must be a list/tuple of exactly two items: [low, high]
+            if not isinstance(search_value, (list, tuple)) or len(search_value) != 2:
+                raise ValueError(f"'between' operator requires a list of exactly two values, got: {search_value!r}")
+            if self.placeholder == '%s':
+                raw_statement = raw_statement.replace('%', '%%')
+            raw_statement = raw_statement.replace('?', self.placeholder)
 
         elif searchcriteria in ['fts', 'fts_query']:
             if self.dbms not in ['Pg']:
@@ -258,59 +284,104 @@ class Datasource:
             return 'desc' if ord == 'asc' else 'asc'
         return ord
 
+    def _build_single_filter(self, f: dict) -> tuple:
+        """
+        Builds SQL fragment and values for a single filter dict.
+        Returns (sql_fragment, values_list).
+        """
+        colonna     = f.get('field')
+        criterio    = f.get('operator', 'icontains')
+        valore      = f.get('value')
+        tipo_valore = f.get('value_type', 'text')
+
+        sql_frag = self._build_filter(
+            col=colonna,
+            searchcriteria=criterio,
+            search_value=valore,
+            value_type=tipo_valore,
+        )
+
+        if criterio in ['null', 'notnull']:
+            return sql_frag, []
+        elif criterio in ['in', 'notin']:
+            if isinstance(valore, (list, tuple)):
+                return sql_frag, list(valore)
+            else:
+                return sql_frag, [valore]
+        elif criterio == 'between':
+            # value is [low, high]
+            return sql_frag, list(valore)
+        else:
+            return sql_frag, [valore]
+
+    def _build_filter_group(self, filters: list, join: str = 'and') -> tuple:
+        """
+        Recursively builds SQL for a list of filters.
+        Each item can be:
+          - a plain dict          → single filter (AND by default)
+          - {'or':  [...]}        → OR group
+          - {'and': [...]}        → AND group (for nesting inside an OR)
+        Returns (sql_fragment, values_list).
+        """
+        parts = []
+        values = []
+
+        for item in filters:
+            if not isinstance(item, dict):
+                continue
+
+            if 'or' in item:
+                sub_sql, sub_vals = self._build_filter_group(item['or'], join='or')
+                parts.append('(' + sub_sql + ')')
+                values.extend(sub_vals)
+
+            elif 'and' in item:
+                sub_sql, sub_vals = self._build_filter_group(item['and'], join='and')
+                parts.append('(' + sub_sql + ')')
+                values.extend(sub_vals)
+
+            else:
+                sql_frag, vals = self._build_single_filter(item)
+                parts.append(sql_frag)
+                values.extend(vals)
+
+        joiner = f' {join} '
+        return joiner.join(parts), values
+
     def _build_where(self, **kwargs):
         o = {'find': '=', 'forwards': '>', 'backwards': '<'}
 
-        f_move = list(filter(lambda x: x.get('type', 'search') == 'move',   kwargs['filters']))
-        f_search = list(filter(lambda x: x.get('type', 'search') == 'search', kwargs['filters']))
+        f_move   = [x for x in kwargs['filters'] if isinstance(x, dict) and x.get('type', 'search') == 'move']
+        f_search = [x for x in kwargs['filters'] if not isinstance(x, dict) or x.get('type', 'search') == 'search']
 
         m_where = []
-        m_data = []
+        m_data  = []
 
         if kwargs["move"] in ['find', 'forwards', 'backwards']:
             for i in range(len(f_move), 0, -1):
                 or_where = list(map(
-                        lambda x: self._build_filter(col=x.get('field'), searchcriteria='='),
-                        f_move[0:i-1]
-                        ))
-                
-                m_statement = self._quote(f_move[i-1].get('field'), DBMS_MAP[kwargs["dbms"]]['quote']) + o[kwargs["move"]] + self.placeholder
+                    lambda x: self._build_filter(col=x.get('field'), searchcriteria='='),
+                    f_move[0:i-1]
+                ))
+                m_statement = (
+                    self._quote(f_move[i-1].get('field'), DBMS_MAP[kwargs["dbms"]]['quote'])
+                    + o[kwargs["move"]]
+                    + self.placeholder
+                )
                 or_where.append(m_statement)
                 m_where.append('(' + ' and '.join(or_where) + ')')
-
-                m_data.extend(list(map(lambda x: x.get('value'), f_move[0:i])))
+                m_data.extend([x.get('value') for x in f_move[0:i]])
 
                 if kwargs["move"] == 'find':
                     break
 
-        s_where = []
-        s_data = []
-
-        for x in f_search:
-            colonna = x.get('field')
-            criterio = x.get('operator', 'icontains')
-            valore = x.get('value')
-            tipo_valore = x.get('value_type', 'text') 
-
-            if criterio in ['null', 'notnull']:
-                s_where.append(self._build_filter(col=colonna, searchcriteria=criterio, search_value=valore, value_type=tipo_valore))
-                continue
-
-            if criterio in ['in', 'notin']:
-                if isinstance(valore, (list, tuple)):
-                    s_data.extend(valore)
-                else:
-                    s_data.append(valore)
-            else:
-                s_data.append(valore)
-
-            s_where.append(self._build_filter(col=colonna, searchcriteria=criterio, search_value=valore, value_type=tipo_valore))
+        s_sql, s_data = self._build_filter_group(f_search, join='and')
 
         q_where = []
         if m_where:
             q_where.append("(" + " or ".join(m_where) + ")")
-        if s_where:
-            q_where.append("(" + " and ".join(s_where) + ")")
+        if s_sql:
+            q_where.append("(" + s_sql + ")")
 
         return {
             'where': " and ".join(q_where),
@@ -318,8 +389,8 @@ class Datasource:
         }
 
     def where(self, **kwargs):
-        more_filters = kwargs.get('filters', [])
-        all_filters = self.filters + more_filters
+        # base_filters (always applied) + filters (per-call)
+        all_filters = self.base_filters + kwargs.get('filters', [])
 
         if len(all_filters) > 0:
             q_filters = self._build_where(
@@ -339,19 +410,21 @@ class Datasource:
         return final_list[start : start + length]
 
     def select(self, **kwargs):
-        more_filters = kwargs.get('filters', [])
-
+        # columns: passed per-call, can be computed at runtime
+        raw_columns = kwargs.get('columns', [])
         columns = list(
             map(
                 lambda x: self._quote(x.get('field'), DBMS_MAP[self.dbms]['quote']),
                 filter(
                     lambda x: (x.get("type", "text") != "blob"),
-                    self.columns)
+                    raw_columns)
             ))
 
-        if len(self.filters + more_filters) > 0:
+        # base_filters (always applied) + filters (per-call)
+        all_filters = self.base_filters + kwargs.get('filters', [])
+        if len(all_filters) > 0:
             q_filters = self._build_where(
-                filters=self.filters + more_filters,
+                filters=all_filters,
                 move=self.move,
                 dbms=self.dbms
             )
