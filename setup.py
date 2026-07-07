@@ -6,7 +6,7 @@ def readme():
 
 setup(
         name='filtersql',
-        version='0.4.2',
+        version='0.5',
         description='SQL Backend Library for AI, Datatables and Frontend Apps',
         url='https://github.com/fthiella/filtersql',
         author='Federico Thiella',
