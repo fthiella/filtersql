@@ -1,6 +1,14 @@
 # filtersql
 
-A simple and zero-dependency Python library that takes plain Python dicts and compiles them into clean, secure, and parameterized SQL.
+**Version: 0.9.0**
+
+> **Note**: This is a pre-1.0 release. The README is not fully updated yet.  
+> Core functionality is stable and ready for testing/production use, but documentation and examples are still being finalized.
+
+
+A compiler from structured JSON filters to safe SQL.
+
+> JSON -> compiler -> SQL
 
 This library is not meant to cover every SQL feature or extension, but it is designed specifically for:
 
@@ -275,7 +283,7 @@ filters = [f.model_dump() for f in parsed.sql_filters]
 ds = filtersql.Datasource(source = 'documents', dbms = 'Pg', placeholder = '%s')
 
 where_clause, values = ds.where(filters=filters)  
-# where_clause: 'and ("doc_type"=%s and "doc_date">=%s)'  
+# where_clause: '("doc_type"=%s and "doc_date">=%s)'  
 # values:       ['CONTRACT', '2025-01-01']
 ```
 
@@ -293,7 +301,7 @@ When a JSONB field contains numeric or date values, add `value_type` to get the 
 
 Without the cast, Postgres performs text comparisons, leading to incorrect results for numeric ranges (e.g., `'9' > '10'`).
 
-## Full-text search (PostgreSQL only)
+## Full-text search (PostgreSQL and MySQL only)
 
 Two operators for full-text search using `websearch_to_tsquery`:
 
@@ -316,6 +324,16 @@ Default language is `'english'`. You can change it globally on initialization:
 ```python
 ds = filtersql.Datasource(..., fts_language='italian')
 ```
+
+### MySQL
+
+MySQL FTS uses `MATCH() AGAINST()` in BOOLEAN MODE:
+
+```python
+{'field': 'content', 'operator': 'fts', 'value': 'oxygen supply'}
+# -> match("content") against(? in boolean mode)
+```
+Note: Requires a FULLTEXT index on the column.
 
 ## Flask + DataTables example
 
