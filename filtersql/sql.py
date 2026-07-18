@@ -41,12 +41,12 @@ DBMS_MAP = {
             '>=':              '{col} >= {param}',
             '<':               '{col} < {param}',
             '<=':              '{col} <= {param}',
-            'starts_with':     '{col} like {param} || \'%\'',
-            'ends_with':       '{col} like \'%\' || {param}',
-            'contains':        '{col} like \'%\' || {param} || \'%\'',
-            'istarts_with':    '{col} ilike {param} || \'%\'',
-            'iends_with':      '{col} ilike \'%\' || {param}',
-            'icontains':       '{col} ilike \'%\' || {param} || \'%\'',
+            'starts_with':     '{col} like {param} || chr(37)',
+            'ends_with':       '{col} like chr(37) || {param}',
+            'contains':        '{col} like chr(37) || {param} || chr(37)',
+            'istarts_with':    '{col} ilike {param} || chr(37)',
+            'iends_with':      '{col} ilike chr(37) || {param}',
+            'icontains':       '{col} ilike chr(37) || {param} || chr(37)',
             'in':              '{col} in ({params})',
             'notin':           '{col} not in ({params})',
             'reverse_in':      '{param} in ({cols})',
@@ -55,9 +55,9 @@ DBMS_MAP = {
             'fts':             "{col} @@ websearch_to_tsquery('{lang}', {param})",
             'fts_query':       "to_tsvector('{lang}', coalesce({col}, '')) @@ websearch_to_tsquery('{lang}', {param})",
             'between':         '{col} between {param1} and {param2}',
-            'not_starts_with': '{col} not like {param} || \'%\'',
-            'not_contains':    '{col} not like \'%\' || {param} || \'%\'',
-            'not_icontains':   '{col} not ilike \'%\' || {param} || \'%\'',
+            'not_starts_with': '{col} not like {param} || chr(37)',
+            'not_contains':    '{col} not like chr(37) || {param} || chr(37)',
+            'not_icontains':   '{col} not ilike chr(37) || {param} || chr(37)',
             'regexp':          '{col} ~ {param}',
             'iregexp':         '{col} ~* {param}',
         },
@@ -194,10 +194,27 @@ class Datasource:
         quote_char = DBMS_MAP[self.dbms]['quote']
         delim = DBMS_MAP[self.dbms]['delimiter']
 
-        parsed_columns = [
-            self._quote(x['field'], quote_char)
-            for x in columns
-        ]
+        parsed_columns = []
+        for x in columns:
+            if isinstance(x, str):
+                # Simple column name
+                parsed_columns.append(self._quote(x, quote_char))
+            elif isinstance(x, dict):
+                field = x.get('field') or x.get('name')
+                if not field:
+                    raise ValidationError(f"Column dict missing 'field' or 'name': {x}")
+                
+                if x.get('raw', False):
+                    parsed_columns.append(str(field))  # raw SQL fragment
+                else:
+                    quoted = self._quote(field, quote_char)
+                    # Support alias
+                    alias = x.get('alias') or x.get('as')
+                    if alias:
+                        quoted += f" AS {self._quote(alias, quote_char)}"
+                    parsed_columns.append(quoted)
+            else:
+                raise ValidationError(f"Invalid column format: {x}")
 
         active_direction = direction or self.direction
         where_clause, where_values = self.where(filters=filters, direction=active_direction)
@@ -614,10 +631,13 @@ class Datasource:
                     start + length
                 )
 
-def filtersql(payload, dbms='Pg', scope=None, raw_source=False, placeholder='?') -> tuple[str, list]:
+def filtersql(payload=None, dbms='Pg', scope=None, raw_source=False, placeholder='?', **kwargs) -> tuple[str, list]:
+    payload = payload.copy() if payload else {}
+    payload.update(kwargs)
+
     action = payload.get('action', '').lower()
     source = payload.get('source')
-    
+
     if not source:
         raise ValidationError("Need to specify 'source'.")
     if action not in ['select', 'insert', 'update', 'delete']:

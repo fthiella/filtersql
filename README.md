@@ -1,22 +1,20 @@
 # filtersql
 
-**Version: 0.9.0**
-
-> **Note**: This is a pre-1.0 release. The README is not fully updated yet.  
-> Core functionality is stable and ready for testing/production use, but documentation and examples are still being finalized.
-
+**Version: 0.9.5**
 
 A compiler from structured JSON filters to safe SQL.
 
-> JSON -> compiler -> SQL
+> **JSON → compiler → Safe SQL**
 
-This library is not meant to cover every SQL feature or extension, but it is designed specifically for:
+This library is not meant to cover every SQL feature, but it is designed specifically for:
 
-* DataTables server-side backends  
-* Access-style (cursor-based) pagination  
-* AI-generated filter/query pipelines (LLM prompt engineering)
+* **DataTables** server-side backends
+* **Access-style** (cursor-based) pagination
+* **AI-generated** filter/query pipelines (LLM prompt engineering)
 
-Supports PostgreSQL, SQLite, MySQL, and Oracle.
+Supports **PostgreSQL, SQLite, MySQL, and Oracle**.
+
+---
 
 ## Install
 
@@ -27,49 +25,35 @@ pip install filtersql
 ## Quick Start (SELECT)
 
 ```python
-import filtersql
+from filtersql import Datasource
 
-ds = filtersql.Datasource(  
-    source = 'users',  
-    dbms   = 'Pg',  # Supports 'Pg', 'SQLite', 'mysql', 'Oracle'  
-    placeholder = '%s'  
+ds = Datasource(source='users', dbms='Pg')
+
+query, params = ds.select(
+    columns=['id', 'first_name', 'email'],
+    filters=[
+        {'field': 'first_name', 'operator': 'icontains', 'value': 'john'},
+        {'field': 'status', 'operator': '=', 'value': 'active'}
+    ],
+    order=[{'field': 'id', 'order': 'desc'}]
 )
 
-columns = [  
-    {'field': 'id'},  
-    {'field': 'first_name'},  
-    {'field': 'last_name'},  
-]
-
-filters = [  
-    {'field': 'first_name', 'operator': 'icontains', 'value': 'John'},  
-    {'field': 'last_name',  'operator': 'icontains', 'value': 'Smith'},  
-]
-
-query, values = ds.select(  
-    columns = columns,  
-    filters = filters,  
-    order   = [{'field': 'first_name', 'order': 'asc'}],  
-    limit   = {'start': 0, 'length': 10},  
-)
-
-print(query)  
-# select  
-#   "id",  
-#   "first_name",  
-#   "last_name"
-# from
-#   "users"
-# where
-#   ("first_name" ilike '%%' || %s || '%%' and "last_name" ilike '%%' || %s || '%%')
-# order by
-#   "first_name" asc
-# limit 10 offset 0
-
-print(values)  
-# ['John', 'Smith']
+print(query)                                                    
+print(params)
 
 rows = execute_db(query, values)
+```
+## Core Concepts
+
+```python
+columns = ['id', 'first_name']                    # simple
+```
+or
+```python
+columns = [
+    {'field': 'first_name', 'alias': 'First Name'},
+    {'field': 'created_at', 'raw': True}          # raw SQL
+]
 ```
 
 ## CRUD Operations (Insert, Update, Delete)
@@ -88,8 +72,8 @@ ds = filtersql.Datasource(source='users', dbms='Pg', placeholder='%s')
 query, values = ds.insert(  
     values = {  
         'first_name': 'John',  
-        'last_name': 'Bobs',  
-        'email': 'john.bobs@example.com'  
+        'last_name': 'Smith',  
+        'email': 'john.smith@example.com'  
     }  
 )
 
@@ -100,7 +84,7 @@ print(query)
 #   (%s, %s, %s)
 
 print(values)  
-# ['John', 'Bobs', 'john.bobs@example.com']
+# ['John', 'Smith', 'john.smith@example.com']
 ```
 
 #### PostgreSQL returning

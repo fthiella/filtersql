@@ -1,0 +1,333 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>filtersql - DataTables</title>
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css">
+    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css">
+    <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
+    <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; 
+            padding: 40px; 
+            background: #121212; 
+            color: #e0e0e0;
+        }
+        .container { 
+            max-width: 1200px; 
+            margin: 0 auto; 
+            background: #1e1e1e; 
+            padding: 30px; 
+            border-radius: 8px; 
+            box-shadow: 0 4px 15px rgba(0,0,0,0.6); 
+            border: 1px solid #333; 
+        }
+        h1 { color: #ffffff; margin-bottom: 5px; }
+        .subtitle { color: #aaaaaa; margin-top: 0; margin-bottom: 20px; }
+        code { 
+            background: #2d2d2d; 
+            color: #9cdcfe; 
+            padding: 2px 6px; 
+            border-radius: 3px; 
+            font-size: 13px; 
+            border: 1px solid #444; 
+        }
+
+        /* --- Generic Badges (Status) --- */
+        .badge { padding: 4px 10px; border-radius: 20px; font-size: 11px; font-weight: bold; border: 1px solid transparent; letter-spacing: 0.5px; }
+        .badge.active { background: #0e6320; color: #ffffff; border-color: #107c41; }
+        .badge.inactive { background: #5c1b22; color: #ffb3b8; border-color: #a31515; }
+
+        /* --- DataTables Base Dark Mode --- */
+        table.dataTable { border-collapse: collapse !important; width: 100%; border-bottom: 1px solid #333; color: #d4d4d4; }
+        table.dataTable thead th { 
+            background-color: #252526; 
+            color: #cccccc; 
+            border-bottom: 2px solid #444 !important; 
+            padding: 12px 10px; 
+            vertical-align: top;
+        }
+        table.dataTable tbody td { 
+            padding: 14px 10px; 
+            border-bottom: 1px solid #333; 
+            background-color: #1e1e1e;
+            color: #d4d4d4; 
+            vertical-align: middle;
+        }
+        table.dataTable tbody tr:hover td { background-color: #2a2d2e !important; transition: background 0.2s ease; }
+
+        /* DataTables surrounding elements */
+        .dataTables_wrapper .dataTables_info, 
+        .dataTables_wrapper .dataTables_length,
+        .dataTables_wrapper .dataTables_processing { color: #aaaaaa !important; }
+        
+        .dataTables_wrapper .dataTables_length select {
+            background-color: #3c3c3c;
+            color: #ffffff;
+            border: 1px solid #555;
+            border-radius: 4px;
+            padding: 4px 8px;
+            outline: none;
+        }
+        .dataTables_wrapper .dataTables_length select:focus { border-color: #007acc; }
+
+        /* Global Search Input Style */
+        .dataTables_wrapper .dataTables_filter input {
+            background: #1e1e1e;
+            color: #d4d4d4;
+            border: 1px solid #555;
+            border-radius: 4px;
+            padding: 4px 8px;
+            margin-left: 8px;
+        }
+        .dataTables_wrapper .dataTables_filter input:focus {
+            outline: none;
+            border-color: #007acc;
+            box-shadow: 0 0 0 1px #007acc;
+        }
+
+        /* Dark Pagination */
+        .dataTables_wrapper .dataTables_paginate { margin-top: 15px; }
+        .dataTables_wrapper .dataTables_paginate .paginate_button {
+            border-radius: 4px !important;
+            padding: 6px 12px !important;
+            margin: 0 2px;
+            border: 1px solid transparent !important;
+            color: #cccccc !important;
+            font-weight: 500;
+        }
+        .dataTables_wrapper .dataTables_paginate .paginate_button.current, 
+        .dataTables_wrapper .dataTables_paginate .paginate_button.current:hover {
+            background: #007acc !important;
+            color: white !important;
+            border: 1px solid #007acc !important;
+        }
+        .dataTables_wrapper .dataTables_paginate .paginate_button:hover {
+            background: #333333 !important;
+            color: #ffffff !important;
+            border: 1px solid #555 !important;
+        }
+        .dataTables_wrapper .dataTables_paginate .paginate_button.disabled,
+        .dataTables_wrapper .dataTables_paginate .paginate_button.disabled:hover {
+            color: #555 !important;
+            background: transparent !important;
+            border: 1px solid transparent !important;
+        }
+
+        /* --- Column Filters --- */
+        .table-header-wrapper {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .table-header-label {
+            font-weight: 600;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .column-filter {
+            width: 100%;
+            background: #1e1e1e;
+            color: #d4d4d4;
+            border: 1px solid #555;
+            border-radius: 4px;
+            padding: 5px 6px;
+            font-size: 12px;
+            box-sizing: border-box;
+            font-family: monospace;
+            transition: all 0.2s;
+        }
+        .column-filter::placeholder { color: #666; font-family: sans-serif; }
+        .column-filter:focus {
+            outline: none;
+            border-color: #007acc;
+            background: #252526;
+            box-shadow: 0 0 0 1px #007acc;
+        }
+
+        /* --- Filter Info & Reset Button --- */
+        .filter-badge {
+            padding: 4px 10px;
+            border-radius: 12px;
+            font-size: 12px;
+            margin-left: 10px;
+            font-weight: 600;
+        }
+        .filter-badge.active { background: #0e6320; color: white; border: 1px solid #107c41; }
+        .filter-badge.inactive { background: #2d2d2d; color: #888; border: 1px solid #444; }
+        
+        .clear-filters-btn {
+            background: #a31515;
+            color: white;
+            border: 1px solid #c62828;
+            padding: 4px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-left: 10px;
+            font-weight: 600;
+            transition: background 0.2s;
+        }
+        .clear-filters-btn:hover { background: #c62828; }
+    </style>
+</head>
+<body>
+<div class="container">
+    <h1>DataTables + filtersql</h1>
+    <p class="subtitle">
+        Server-side processing with <code>filtersql</code> and column filters 
+        <span id="filterInfo"></span>
+    </p>
+    
+    <table id="usersTable" class="display" style="width:100%">
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>First Name</th>
+                <th>Last Name</th>
+                <th>Email</th>
+                <th>Age</th>
+                <th>Status</th>
+            </tr>
+        </thead>
+    </table>
+    
+    <div style="margin-top: 20px; font-size: 12px; color: #888; text-align: center;">
+        🔍 Search in any column using the header text boxes or the global search on the top right
+    </div>
+</div>
+
+<script>
+$(document).ready(function() {
+    var table = $('#usersTable').DataTable({
+        processing: true,
+        serverSide: true,
+        ajax: {
+            url: '/api/users', 
+            type: 'GET',
+            dataType: 'json',
+            error: function(xhr, error, thrown) {
+                console.error('DataTables Error:', error, thrown);
+                alert('Data loading error: ' + (xhr.responseJSON?.error || error));
+            }
+        },
+        columns: [
+            { data: 'id', className: 'text-center' },
+            { data: 'first_name', className: 'text-left' },
+            { data: 'last_name', className: 'text-left' },
+            { data: 'email', className: 'text-left' },
+            { data: 'age', className: 'text-center' },
+            { 
+                data: 'status',
+                className: 'text-center',
+                render: function(data) {
+                    return data === 'active' 
+                        ? '<span class="badge active">Active</span>' 
+                        : '<span class="badge inactive">Inactive</span>';
+                }
+            }
+        ],
+        pageLength: 10,
+        lengthMenu: [[5, 10, 25, 50, 100], [5, 10, 25, 50, 100]],
+        language: {
+            search: 'Global Search:',
+            searchPlaceholder: 'Search everywhere...',
+            lengthMenu: 'Show _MENU_ entries',
+            info: 'Showing _START_ to _END_ of _TOTAL_ entries',
+            infoEmpty: 'Showing 0 to 0 of 0 entries',
+            infoFiltered: '(filtered from _MAX_ total entries)',
+            zeroRecords: 'No matching records found',
+            paginate: {
+                first: 'First',
+                last: 'Last',
+                next: 'Next',
+                previous: 'Previous'
+            }
+        },
+        initComplete: function() {
+            var api = this.api();
+            
+            api.columns().every(function(index) {
+                var column = this;
+                var header = $(column.header());
+                
+                var wrapper = $('<div class="table-header-wrapper"></div>');
+                var label = $('<span class="table-header-label"></span>').text(header.text().trim());
+                wrapper.append(label);
+                
+                var input = $('<input type="text" class="column-filter" placeholder="Filter...">')
+                    .appendTo(wrapper)
+                    .on('click', function(e) {
+                        e.stopPropagation(); 
+                    })
+                    .on('keyup change', function() {
+                        var val = $(this).val();
+                        if (column.search() !== val) {
+                            column.search(val).draw();
+                            updateFilterInfo();
+                        }
+                    })
+                    .on('search', function() {
+                        if ($(this).val() === '') {
+                            column.search('').draw();
+                            updateFilterInfo();
+                        }
+                    });
+                
+                header.empty().append(wrapper);
+            });
+            
+            var filterInfo = $('#filterInfo');
+            var clearBtn = $('<button class="clear-filters-btn">✕ Clear filters</button>')
+                .appendTo(filterInfo)
+                .on('click', function() {
+                    $('.column-filter').val('');
+                    api.columns().every(function() {
+                        this.search('');
+                    });
+                    api.search(''); // Reset global search too
+                    api.draw();
+                    updateFilterInfo();
+                });
+            
+            function updateFilterInfo() {
+                var activeFilters = 0;
+                $('.column-filter').each(function() {
+                    if ($(this).val() && $(this).val().trim() !== '') {
+                        activeFilters++;
+                    }
+                });
+                
+                if (api.search() !== '') {
+                    activeFilters++;
+                }
+                
+                if (activeFilters > 0) {
+                    filterInfo.html('<span class="filter-badge active">' + activeFilters + ' active filters</span> ');
+                    filterInfo.append(clearBtn);
+                } else {
+                    filterInfo.html('<span class="filter-badge inactive">No active filters</span> ');
+                    filterInfo.append(clearBtn);
+                }
+            }
+            
+            updateFilterInfo();
+        },
+        searchDelay: 500,
+        stateSave: true,
+        stateDuration: 60 * 60 * 24,
+        loadingRecords: 'Loading...',
+        processing: '<div style="padding: 20px; text-align: center;">Loading...</div>'
+    });
+    
+    $(document).on('keydown', function(e) {
+        if (e.key === 'Escape') {
+            $('.clear-filters-btn').click();
+        }
+    });
+});
+</script>
+</body>
+</html>

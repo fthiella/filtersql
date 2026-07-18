@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>filtersql - editor</title>
+    <style>
+        body { font-family: monospace; padding: 20px; background: #1e1e1e; color: #d4d4d4; max-width: 900px; margin: auto; }
+        .panel { background: #2d2d2d; padding: 20px; margin-bottom: 20px; border-radius: 5px; box-shadow: 0 4px 6px rgba(0,0,0,0.3); }
+        h3 { margin-top: 0; color: #fff; border-bottom: 1px solid #444; padding-bottom: 10px; display: flex; justify-content: space-between; }
+        input, select, textarea, button { padding: 8px; background: #3c3c3c; color: white; border: 1px solid #555; border-radius: 3px; font-family: monospace; }
+        input:read-only, select:disabled { background: #222; color: #666; border-color: #222; }
+        button { cursor: pointer; background: #007acc; border: none; font-weight: bold; }
+        button:hover { background: #0098ff; }
+        
+        .nav-bar { display: flex; justify-content: space-between; align-items: center; background: #252526; padding: 10px; margin-bottom: 20px; border: 1px solid #333; border-radius: 5px; }
+        .nav-group { display: flex; gap: 8px; align-items: center; }
+        .badge-mode { background: #848200; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: bold; color: white; }
+        .badge-insert { background: #0e6320; }
+
+        .form-group { margin-bottom: 15px; display: flex; align-items: flex-start; gap: 15px; }
+        .form-group label { color: #4ec9b0; font-weight: bold; width: 140px; text-align: right; padding-top: 5px; }
+        .form-group input, .form-group select, .form-group textarea { flex-grow: 1; max-width: 500px; font-size: 14px; text-align: left; }
+        .form-group textarea { height: 60px; resize: vertical; }
+        
+        pre { background: #000; padding: 10px; border: 1px solid #333; overflow-x: auto; font-size: 12px; color: #9cdcfe; }
+    </style>
+</head>
+<body>
+
+    <div class="panel">
+        <h3>Search Filters</h3>
+        <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+            <select id="f_field">
+                <option value="id">ID</option>
+                <option value="first_name">First Name</option>
+                <option value="last_name">Last Name</option>
+                <option value="email">Email</option>
+                <option value="age">Age</option>
+                <option value="status">Status</option>
+                <option value="role">Role</option>
+            </select>
+            
+            <select id="f_op">
+                <option value="icontains">Contains (icontains)</option>
+                <option value="=">Equals (=)</option>
+                <option value=">">Greater than (>)</option>
+                <option value="in">In list (in)</option>
+            </select>
+            
+            <input type="text" id="f_val" placeholder="E.g.: Smith or 1,2,3" style="flex-grow: 1; text-align: left;">
+            <button onclick="app.addFilter()">+ Apply Filter</button>
+            <button onclick="app.clearFilters()" style="background: #a31515;">Reset</button>
+        </div>
+        <div id="active_filters" style="margin-top:15px; color:#ce9178; font-size: 12px;">No active filters</div>
+    </div>
+
+    <div class="panel">
+        <h3>
+            <span>Record Details</span>
+            <span id="mode_indicator" class="badge-mode">VIEW MODE</span>
+        </h3>
+        
+        <div class="nav-bar">
+            <div class="nav-group">
+                <button onclick="app.goToFirst()">|&laquo; First</button>
+                <button onclick="app.move(-1)">&laquo; Prev</button>
+            </div>
+            
+            <div class="nav-group">
+                <span>Current Record (ID):</span>
+                <input type="text" id="c_offset_display" value="-" style="width: 80px; text-align: center; background: #fff; color: #000;" onchange="app.seekRecord()" placeholder="Search ID...">
+                <button onclick="app.seekRecord()" style="padding: 5px 10px; font-size: 12px;">Go</button>
+            </div>
+            
+            <div class="nav-group">
+                <button onclick="app.move(1)">Next &raquo;</button>
+                <button onclick="app.goToLast()">Last &raquo;|</button>
+            </div>
+        </div>
+
+        <div id="editor_form"></div>
+
+        <div style="margin-top: 25px; border-top: 1px solid #444; padding-top: 15px; display: flex; justify-content: space-between;">
+            <button onclick="app.createNew()" style="background: #107c41;">+ New Record</button>
+            <button onclick="app.saveRecord()" style="background: #0078d7; font-size: 15px; padding: 10px 25px;">💾 Save Changes</button>
+        </div>
+    </div>
+
+    <div class="panel">
+        <h3 style="font-size: 14px; border:none; margin:0; padding:0; cursor:pointer;" onclick="const o = document.getElementById('debug_out'); o.style.display = o.style.display === 'none' ? 'block' : 'none';">
+            🔍 SQL Backend Debug (Click to expand)
+        </h3>
+        <pre id="debug_out" style="display: none; margin-top: 10px;">...</pre>
+    </div>
+
+    <script>
+        var userSchema = [
+            { name: "id", label: "User ID", type: "text", readonly: true },
+            { name: "first_name", label: "First Name", type: "text", required: true },
+            { name: "last_name", label: "Last Name", type: "text", required: true },
+            { name: "email", label: "Email", type: "text" },
+            { name: "age", label: "Age", type: "text" },
+            { name: "status", label: "Status", type: "select", options: ["active", "inactive", "pending"] },
+            { name: "role", label: "Role", type: "select", options: ["admin", "editor", "user", "viewer"] }
+        ];
+
+        var app = window.app = {
+            schema: userSchema,
+            currentSource: 'users',
+            filters: [],
+            currentRecord: null,
+            isInsertMode: false,
+
+            addFilter: function() {
+                var field = document.getElementById('f_field').value;
+                var op = document.getElementById('f_op').value;
+                var val = document.getElementById('f_val').value.trim();
+                
+                if (!val) return;
+                
+                if (op === 'in') {
+                    val = val.split(',').map(function(item) {
+                        return isNaN(item) ? item.trim() : Number(item);
+                    });
+                }
+
+                this.filters.push({ field: field, operator: op, value: val });
+                document.getElementById('f_val').value = '';
+                this.renderFilters();
+                this.goToFirst(); 
+            },
+
+            clearFilters: function() {
+                this.filters = [];
+                this.renderFilters();
+                this.goToFirst();
+            },
+
+            renderFilters: function() {
+                var box = document.getElementById('active_filters');
+                box.innerHTML = this.filters.length === 0 ? "No active filters" : JSON.stringify(this.filters);
+            },
+
+            goToFirst: function() {
+                this.isInsertMode = false;
+                this.currentRecord = null;
+                this.loadData('first');
+            },
+
+            goToLast: function() {
+                this.isInsertMode = false;
+                this.currentRecord = null;
+                this.loadData('last');
+            },
+
+            move: function(step) {
+                if (this.isInsertMode) {
+                    this.goToFirst();
+                    return;
+                }
+                if (!this.currentRecord) return;
+                this.loadData(step > 0 ? 'next' : 'prev');
+            },
+
+            seekRecord: async function() {
+                var targetId = document.getElementById('c_offset_display').value.trim();
+                if (!targetId || targetId === "NEW" || targetId === "-") return;
+                
+                this.isInsertMode = false;
+                
+                // Usiamo slice() invece di [...] per compatibilità totale
+                var currentFilters = this.filters.slice();
+                currentFilters.push({ field: 'id', operator: '=', value: targetId });
+
+                var payload = {
+                    limit: { start: 0, length: 1 },
+                    order: [{ field: 'id', order: 'asc' }],
+                    filters: currentFilters
+                };
+
+                try {
+                    var res = await fetch('/api/' + this.currentSource + '/select', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    
+                    var response = await res.json();
+                    
+                    if (response.status === 'error') {
+                        alert("SQL Error: " + response.message);
+                        return;
+                    }
+
+                    if (response.data.length === 0) {
+                        alert("Record ID " + targetId + " does not exist or is excluded by active filters.");
+                        document.getElementById('c_offset_display').value = this.currentRecord ? this.currentRecord.id : "-";
+                    } else {
+                        this.currentRecord = response.data[0];
+                        document.getElementById('c_offset_display').value = this.currentRecord.id;
+                        this.renderForm(this.currentRecord);
+                        
+                        var mi = document.getElementById('mode_indicator');
+                        mi.innerText = "VIEW MODE (SEEK)";
+                        mi.className = "badge-mode";
+                    }
+
+                    document.getElementById('debug_out').innerText = response.debug_sql + "\nParameters: " + JSON.stringify(response.debug_params);
+                } catch (err) {
+                    alert("Network Error: " + err.message);
+                }
+            },
+
+            createNew: function() {
+                this.isInsertMode = true;
+                this.currentRecord = null;
+                
+                var mi = document.getElementById('mode_indicator');
+                mi.innerText = "NEW RECORD";
+                mi.className = "badge-mode badge-insert";
+                document.getElementById('c_offset_display').value = "NEW";
+
+                var formHtml = '';
+                this.schema.forEach(function(field) {
+                    formHtml += '<div class="form-group"><label>' + field.label + '</label>';
+                    
+                    var isId = field.name === 'id';
+                    var selectDisabled = isId ? 'disabled' : '';
+                    var inputReadonly = isId ? 'readonly' : '';
+
+                    if (field.type === 'select') {
+                        formHtml += '<select id="edit_' + field.name + '" data-field="' + field.name + '" ' + selectDisabled + '><option value="">-- Select --</option>';
+                        if (field.options) {
+                            field.options.forEach(function(opt) {
+                                formHtml += '<option value="' + opt + '">' + opt + '</option>';
+                            });
+                        }
+                        formHtml += '</select>';
+                    } else if (field.type === 'textarea') {
+                        formHtml += '<textarea id="edit_' + field.name + '" data-field="' + field.name + '"></textarea>';
+                    } else {
+                        formHtml += '<input type="text" id="edit_' + field.name + '" data-field="' + field.name + '" ' + inputReadonly + ' placeholder="' + (isId ? 'Autogenerated' : '') + '">';
+                    }
+                    formHtml += '</div>';
+                });
+                document.getElementById('editor_form').innerHTML = formHtml;
+            },
+
+            loadData: async function(mode) {
+                var mi = document.getElementById('mode_indicator');
+                mi.innerText = "VIEW MODE";
+                mi.className = "badge-mode";
+
+                var payload = {
+                    limit: { start: 0, length: 1 },
+                    order: [{ field: 'id', order: mode === 'last' ? 'desc' : 'asc' }],
+                    filters: this.filters.slice()
+                };
+
+                if ((mode === 'next' || mode === 'prev') && this.currentRecord) {
+                    payload.direction = mode;
+                    payload.filters.push({ 
+                        type: 'move', 
+                        field: 'id', 
+                        operator: '=', 
+                        value: this.currentRecord.id 
+                    });
+                }
+
+                try {
+                    var res = await fetch('/api/' + this.currentSource + '/select', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    
+                    var response = await res.json();
+                    if (response.status === 'error') {
+                        alert("SQL Engine Error: " + response.message);
+                        return;
+                    }
+
+                    if (response.data.length === 0) {
+                        alert("End of records in this direction.");
+                        if (!this.currentRecord) {
+                            document.getElementById('editor_form').innerHTML = '<p style="text-align:center;color:#888;margin-top:40px;">No records match your criteria.</p>';
+                            document.getElementById('c_offset_display').value = "-";
+                        }
+                    } else {
+                        this.currentRecord = response.data[0];
+                        document.getElementById('c_offset_display').value = this.currentRecord.id;
+                        this.renderForm(this.currentRecord);
+                    }
+
+                    document.getElementById('debug_out').innerText = response.debug_sql + "\nParameters: " + JSON.stringify(response.debug_params);
+                } catch (err) {
+                    alert("Network Error: " + err.message);
+                }
+            },
+
+            renderForm: function(record) {
+                var formHtml = '';
+                this.schema.forEach(function(field) {
+                    var val = record[field.name] !== null && record[field.name] !== undefined ? record[field.name] : '';
+                    var isReadOnly = field.readonly ? 'readonly' : '';
+                    var isDisabled = field.readonly ? 'disabled' : '';
+
+                    formHtml += '<div class="form-group"><label for="edit_' + field.name + '">' + field.label + '</label>';
+
+                    if (field.type === 'select') {
+                        formHtml += '<select id="edit_' + field.name + '" data-field="' + field.name + '" ' + isDisabled + '>';
+                        if (field.options) {
+                            field.options.forEach(function(opt) {
+                                var sel = opt === val ? 'selected' : '';
+                                formHtml += '<option value="' + opt + '" ' + sel + '>' + opt + '</option>';
+                            });
+                        }
+                        formHtml += '</select>';
+                    } else if (field.type === 'textarea') {
+                        formHtml += '<textarea id="edit_' + field.name + '" data-field="' + field.name + '" ' + isReadOnly + '>' + val + '</textarea>';
+                    } else {
+                        formHtml += '<input type="text" id="edit_' + field.name + '" data-field="' + field.name + '" value="' + val + '" ' + isReadOnly + '>';
+                    }
+                    formHtml += '</div>';
+                });
+                document.getElementById('editor_form').innerHTML = formHtml;
+            },
+
+            saveRecord: async function() {
+                var updatedValues = {};
+                var inputs = document.querySelectorAll('#editor_form [data-field]');
+                
+                var self = this;
+                inputs.forEach(function(input) {
+                    if (input.id !== 'edit_id') { 
+                        updatedValues[input.dataset.field] = input.value;
+                    }
+                });
+
+                var payload = { values: updatedValues };
+
+                if (!this.isInsertMode) {
+                    payload.id = { id: document.getElementById('edit_id').value };
+                }
+
+                var action = this.isInsertMode ? 'insert' : 'update';
+                var targetUrl = '/api/' + this.currentSource + '/' + action;
+
+                try {
+                    var res = await fetch(targetUrl, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify(payload)
+                    });
+                    
+                    var response = await res.json();
+                    if (response.status === 'error') {
+                        alert("❌ Persistence Error: " + response.message);
+                    } else {
+                        alert("✅ " + response.message);
+                        self.isInsertMode = false;
+                        if (action === 'insert') self.goToFirst();
+                        else self.seekRecord();
+                    }
+                } catch (err) {
+                    alert("❌ Communication Error: " + err.message);
+                }
+            }
+        };
+
+        window.onload = function() {
+            app.goToFirst();
+        };
+    </script>
+</body>
+</html>

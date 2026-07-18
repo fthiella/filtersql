@@ -121,32 +121,32 @@ class TestFilterOperators(unittest.TestCase):
     # String matching
     def test_starts_with(self):
         q, v = self._where('starts_with', 'Jo')
-        self.assertIn("like %s || '%'", q)
+        self.assertIn("like %s || chr(37)", q)
         self.assertEqual(v, ['Jo'])
 
     def test_ends_with(self):
         q, v = self._where('ends_with', 'son')
-        self.assertIn("like '%' || %s", q)
+        self.assertIn("like chr(37) || %s", q)
 
     def test_contains(self):
         q, v = self._where('contains', 'oh')
-        self.assertIn("like '%' || %s || '%'", q)
+        self.assertIn("like chr(37) || %s || chr(37)", q)
 
     def test_istarts_with(self):
         q, v = self._where('istarts_with', 'jo')
         self.assertIn('ilike', q)
-        self.assertIn("|| '%'", q)
+        self.assertIn("|| chr(37)", q)
 
     def test_iends_with(self):
         q, v = self._where('iends_with', 'son')
         self.assertIn('ilike', q)
-        self.assertIn("'%' ||", q)
+        self.assertIn("chr(37) ||", q)
 
     def test_icontains(self):
         q, v = self._where('icontains', 'oh')
         self.assertIn('ilike', q)
-        self.assertIn("'%' ||", q)
-        self.assertIn("|| '%'", q)
+        self.assertIn("chr(37) ||", q)
+        self.assertIn("|| chr(37)", q)
 
     # Negated string matching
     def test_not_contains(self):
