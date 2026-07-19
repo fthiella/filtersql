@@ -217,13 +217,7 @@ class Datasource:
                 raise ValidationError(f"Invalid column format: {x}")
 
         active_direction = direction or self.direction
-
-        # convert cursor dict to move filters if provided
-        if cursor:
-            cursor_filters = [{'field': k, 'value': v, 'type': 'move'} for k, v in cursor.items()]
-            filters = cursor_filters + filters
-
-        where_clause, where_values = self.where(filters=filters, direction=active_direction)
+        where_clause, where_values = self.where(filters=filters, direction=active_direction, cursor=cursor)
 
         active_order = order if order is not None else self.order
         parsed_order = [
@@ -390,75 +384,78 @@ class Datasource:
             
         return debug_query
 
-    def where(self, *, filters: list = None, direction: str = None) -> tuple[str, list]:
-        """Build a WHERE clause from filters. Returns (clause, values)."""
+    def where(self, *, filters: list = None, direction: str = None, cursor: dict = None) -> tuple[str, list]:
+        """Build a WHERE clause from filters and cursor. Returns (clause, values)."""
         active_direction = direction or self.direction
         scope_filters = [{'field': k, 'operator': '=', 'value': v} for k, v in self.scope.items()]
         all_filters = scope_filters + list(filters or [])
-        if all_filters:
-            return self._build_where(filters=all_filters, direction=active_direction, dbms=self.dbms)
+        
+        if all_filters or cursor:
+            return self._build_where(filters=all_filters, direction=active_direction, dbms=self.dbms, cursor=cursor)
         return "", []
 
-    def _build_where(self, *, filters: list, direction: str, dbms: str) -> tuple[str, list]:
+    def _build_where(self, *, filters: list, direction: str, dbms: str, cursor: dict = None) -> tuple[str, list]:
         """Build a WHERE clause from filters. Returns (clause, values)."""
+        
+        # --- 1. Cursor & Direction Consistency Validation ---
+        if cursor is not None and not isinstance(cursor, dict):
+            raise ValidationError(f"Invalid cursor format. Expected dict, got: {type(cursor).__name__}")
+            
+        if cursor and not direction:
+            raise ValidationError("A 'direction' ('seek', 'next', 'prev') must be provided when using a 'cursor'.")
+            
+        if direction and not cursor:
+            raise ValidationError(f"A 'cursor' dictionary must be provided when using direction '{direction}'.")
+
         if direction and direction not in ['seek', 'next', 'prev']:
-            raise ValidationError(
-                f"Invalid direction '{direction}'. Please use: seek, next, prev."
-            )
+            raise ValidationError(f"Invalid direction '{direction}'. Please use: seek, next, prev.")
 
         operators = {'seek': '=', 'next': '>', 'prev': '<'}
 
-        # --- FIX: Controllo di tipo "Fail Fast" per bloccare input malformati ---
+        # --- 2. Filter Format Validation ("Fail Fast") ---
         for item in filters:
             if not isinstance(item, dict):
-                raise ValidationError(
-                    f"Invalid filter format. Expected dict, got: {type(item).__name__} ({item})"
-                )
-        # -------------------------------------------------------------------------
-
-        # Ora possiamo usare .get() in totale sicurezza
-        f_cursor = [x for x in filters if x.get('type') == 'move']
-        f_search = [x for x in filters if x.get('type', 'search') == 'search']
+                raise ValidationError(f"Invalid filter format. Expected dict, got: {type(item).__name__} ({item})")
 
         m_where = []
         m_data = []
 
-        # Build cursor pagination clause
-        if direction in ['seek', 'next', 'prev'] and f_cursor:
+        # --- 3. Build Cursor Keyset Pagination ---
+        if cursor and direction:  # We now mathematically know both exist and are valid
             op = operators[direction]
+            cursor_items = list(cursor.items())
             
             if direction == 'seek':
                 conditions = []
-                for cursor in f_cursor:
+                for k, v in cursor_items:
                     conditions.append(
-                        f"{self._quote(cursor['field'], DBMS_MAP[dbms]['quote'])} = {self.placeholder}"
+                        f"{self._quote(k, DBMS_MAP[dbms]['quote'])} = {self.placeholder}"
                     )
-                    m_data.append(cursor['value'])
+                    m_data.append(v)
                 m_where.append(' and '.join(conditions))
             else:
-                # Keyset pagination: (col1 > v1) OR (col1 = v1 AND col2 > v2)
-                # NOTA: I duplicati in m_data sono necessari per i placeholder posizionali
+                # Keyset pagination multi-column logic
                 or_conditions = []
-                for i in reversed(range(len(f_cursor))):
+                for i in reversed(range(len(cursor_items))):
                     and_parts = []
                     for j in range(i):
-                        c = f_cursor[j]
+                        k, v = cursor_items[j]
                         and_parts.append(
-                            f"{self._quote(c['field'], DBMS_MAP[dbms]['quote'])} = {self.placeholder}"
+                            f"{self._quote(k, DBMS_MAP[dbms]['quote'])} = {self.placeholder}"
                         )
-                        m_data.append(c['value'])
-                    c = f_cursor[i]
+                        m_data.append(v)
+                    k, v = cursor_items[i]
                     and_parts.append(
-                        f"{self._quote(c['field'], DBMS_MAP[dbms]['quote'])} {op} {self.placeholder}"
+                        f"{self._quote(k, DBMS_MAP[dbms]['quote'])} {op} {self.placeholder}"
                     )
-                    m_data.append(c['value'])
+                    m_data.append(v)
                     or_conditions.append('(' + ' and '.join(and_parts) + ')')
                 m_where.append(' or '.join(or_conditions))
 
-        # Build search conditions
-        s_sql, s_data = self._build_filter_group(f_search, join='and')
+        # --- 4. Build Search Conditions ---
+        s_sql, s_data = self._build_filter_group(filters, join='and')
 
-        # Combine
+        # --- 5. Combine ---
         q_where = []
         if m_where:
             q_where.append('(' + ' and '.join(m_where) + ')')
