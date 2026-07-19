@@ -181,7 +181,7 @@ class Datasource:
                 f"Unknown or missing dbms: '{self.dbms}'. Valid: {list(DBMS_MAP.keys())}"
             )
 
-    def select(self, *, columns: list = None, filters: list = None, order: list = None, limit: dict = None, direction: str = None) -> tuple[str, list]:
+    def select(self, *, columns: list = None, filters: list = None, order: list = None, limit: dict = None, direction: str = None, cursor: dict = None) -> tuple[str, list]:
         """Build a SELECT query. Pass columns, filters, order, limit explicitly."""
         filters = list(filters or [])
         if not isinstance(filters, list):
@@ -217,6 +217,12 @@ class Datasource:
                 raise ValidationError(f"Invalid column format: {x}")
 
         active_direction = direction or self.direction
+
+        # convert cursor dict to move filters if provided
+        if cursor:
+            cursor_filters = [{'field': k, 'value': v, 'type': 'move'} for k, v in cursor.items()]
+            filters = cursor_filters + filters
+
         where_clause, where_values = self.where(filters=filters, direction=active_direction)
 
         active_order = order if order is not None else self.order
@@ -657,7 +663,9 @@ def filtersql(payload=None, dbms='Pg', scope=None, raw_source=False, placeholder
     if action == 'select':
         return ds.select(
             columns=payload.get('columns'),
-            filters=payload.get('filters')
+            filters=payload.get('filters'),
+            cursor=payload.get('cursor'),
+            direction=payload.get('direction'),
         )
 
     elif action == 'insert':

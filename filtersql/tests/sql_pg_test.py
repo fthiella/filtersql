@@ -1139,7 +1139,7 @@ class TestCursorPagination(unittest.TestCase):
     def test_next_single_column(self):
         ds = make_ds(order=[{'field': 'id', 'order': 'asc'}])
         q, v = get_query(ds, 
-            filters=[{'field': 'id', 'type': 'move', 'value': 100}],
+            cursor={'id': 100},
             direction='next'
         )
         self.assertIn('"id" > %s', q)
@@ -1148,7 +1148,7 @@ class TestCursorPagination(unittest.TestCase):
     def test_prev_single_column(self):
         ds = make_ds(order=[{'field': 'id', 'order': 'asc'}])
         q, v = get_query(ds,
-            filters=[{'field': 'id', 'type': 'move', 'value': 100}],
+            cursor={'id': 100},
             direction='prev'
         )
         self.assertIn('"id" < %s', q)
@@ -1157,7 +1157,7 @@ class TestCursorPagination(unittest.TestCase):
     def test_seek_single_column(self):
         ds = make_ds(order=[{'field': 'id', 'order': 'asc'}])
         q, v = get_query(ds,
-            filters=[{'field': 'id', 'type': 'move', 'value': 100}],
+            cursor={'id': 100},
             direction='seek'
         )
         self.assertIn('"id" = %s', q)
@@ -1169,10 +1169,10 @@ class TestCursorPagination(unittest.TestCase):
             {'field': 'first_name', 'order': 'asc'}
         ])
         q, v = get_query(ds,
-            filters=[
-                {'field': 'last_name', 'type': 'move', 'value': 'Smith'},
-                {'field': 'first_name', 'type': 'move', 'value': 'John'}
-            ],
+            cursor={
+              'last_name': 'Smith',
+              'first_name': 'John'
+            },
             direction='next'
         )
         # Expected: (last_name = 'Smith' AND first_name > 'John') OR (last_name > 'Smith')
@@ -1187,10 +1187,10 @@ class TestCursorPagination(unittest.TestCase):
             {'field': 'first_name', 'order': 'asc'}
         ])
         q, v = get_query(ds,
-            filters=[
-                {'field': 'last_name', 'type': 'move', 'value': 'Smith'},
-                {'field': 'first_name', 'type': 'move', 'value': 'John'}
-            ],
+            cursor={
+              'last_name': 'Smith',
+              'first_name': 'John'
+            },
             direction='prev'
         )
         # Expected: (last_name = 'Smith' AND first_name < 'John') OR (last_name < 'Smith')
@@ -1206,11 +1206,11 @@ class TestCursorPagination(unittest.TestCase):
             {'field': 'id', 'order': 'asc'}
         ])
         q, v = get_query(ds,
-            filters=[
-                {'field': 'last_name', 'type': 'move', 'value': 'Smith'},
-                {'field': 'first_name', 'type': 'move', 'value': 'John'},
-                {'field': 'id', 'type': 'move', 'value': 100}
-            ],
+            cursor={
+              'last_name': 'Smith',
+              'first_name': 'John',
+              'id': 100
+            },
             direction='next'
         )
         # Expected: (last_name = 'Smith' AND first_name = 'John' AND id > 100) 
@@ -1226,10 +1226,10 @@ class TestCursorPagination(unittest.TestCase):
         ds = make_ds(order=[{'field': 'id', 'order': 'asc'}])
         q, v = get_query(ds,
             filters=[
-                {'field': 'id', 'type': 'move', 'value': 100},
                 {'field': 'status', 'operator': '=', 'value': 'active'},
                 {'field': 'name', 'operator': 'icontains', 'value': 'john'}
             ],
+            cursor={'id': 100},
             direction='next'
         )
         self.assertIn('"id" > %s', q)
@@ -1244,7 +1244,7 @@ class TestCursorPagination(unittest.TestCase):
             direction='prev'
         )
         q, v = get_query(ds,
-            filters=[{'field': 'id', 'type': 'move', 'value': 100}]
+            cursor={'id': 100}
         )
         self.assertIn('"id" desc', q)  # Order inverted for prev
         self.assertIn('"id" < %s', q)     # And condition uses <
@@ -1252,7 +1252,7 @@ class TestCursorPagination(unittest.TestCase):
     def test_seek_uses_equality_not_inequality(self):
         ds = make_ds(order=[{'field': 'id', 'order': 'asc'}])
         q, v = get_query(ds,
-            filters=[{'field': 'id', 'type': 'move', 'value': 100}],
+            cursor={'id': 100},
             direction='seek'
         )
         self.assertNotIn('>', q)
@@ -1265,10 +1265,10 @@ class TestCursorPagination(unittest.TestCase):
             {'field': 'first_name', 'order': 'asc'}
         ])
         q, v = get_query(ds,
-            filters=[
-                {'field': 'last_name', 'type': 'move', 'value': 'Smith'},
-                {'field': 'first_name', 'type': 'move', 'value': 'John'}
-            ],
+            cursor={
+              'last_name': 'Smith',
+              'first_name': 'John'
+            },
             direction='seek'
         )
         self.assertIn('"last_name" = %s', q)
@@ -1284,10 +1284,12 @@ class TestCursorPagination(unittest.TestCase):
         ])
         q, v = get_query(ds,
             filters=[
-                {'field': 'last_name', 'type': 'move', 'value': 'Smith'},
-                {'field': 'first_name', 'type': 'move', 'value': 'John'},
                 {'field': 'status', 'operator': '=', 'value': 'active'}
             ],
+            cursor={
+              'last_name': 'Smith',
+              'first_name': 'John'
+            },
             direction='next'
         )
         # Values should be: ['Smith', 'John', 'Smith', 'active']
@@ -1300,7 +1302,7 @@ class TestCursorPagination(unittest.TestCase):
     def test_missing_order_uses_default_asc(self):
         ds = make_ds()  # No order specified
         q, v = get_query(ds,
-            filters=[{'field': 'id', 'type': 'move', 'value': 100}],
+            cursor={'id': 100},
             direction='next'
         )
         # Should still work with default order
@@ -1310,9 +1312,9 @@ class TestCursorPagination(unittest.TestCase):
         ds = make_ds(order=[{'field': 'id', 'order': 'asc'}])
         q, v = get_query(ds,
             filters=[
-                {'field': 'id', 'type': 'move', 'value': 100},
                 {'field': 'deleted_at', 'operator': 'null', 'value': None}
             ],
+            cursor={'id': 100},
             direction='next'
         )
         self.assertIn('"id" > %s', q)
@@ -1323,7 +1325,7 @@ class TestCursorPagination(unittest.TestCase):
         ds = make_ds()
         with self.assertRaises(ValidationError):
             get_query(ds,
-                filters=[{'field': 'id', 'type': 'move', 'value': 100}],
+                cursor={'id': 100},
                 direction='invalid'
             )
 

@@ -1,18 +1,22 @@
 # filtersql
 
-**Version: 0.9.5**
+A Python library that compiles structured filter dicts into safe, parameterized SQL.
 
-A compiler from structured JSON filters to safe SQL.
+```
+filters (plain Python dicts) → filtersql → SQL string + values list
+```
 
-> **JSON → compiler → Safe SQL**
+It's not an ORM or a connection manager. It builds the query and returns it.
+Execution is always the caller's responsibility, this makes it work with any
+DB driver (psycopg2, sqlite3, cx_Oracle, mysql-connector) without any adapter code.
 
-This library is not meant to cover every SQL feature, but it is designed specifically for:
+Designed for three use cases:
 
-* **DataTables** server-side backends
-* **Access-style** (cursor-based) pagination
-* **AI-generated** filter/query pipelines (LLM prompt engineering)
+- **DataTables** server-side backends
+- **Cursor-based pagination** (Access-style, no OFFSET)
+- **AI/LLM filter pipelines** - the most interesting one
 
-Supports **PostgreSQL, SQLite, MySQL, and Oracle**.
+Supports PostgreSQL, SQLite, MySQL, and Oracle.
 
 ---
 
@@ -22,426 +26,493 @@ Supports **PostgreSQL, SQLite, MySQL, and Oracle**.
 pip install filtersql
 ```
 
-## Quick Start (SELECT)
+---
+
+## Quick start
 
 ```python
-from filtersql import Datasource
+import filtersql
 
-ds = Datasource(source='users', dbms='Pg')
+ds = filtersql.Datasource(
+    source      = 'users',
+    dbms        = 'Pg',
+    placeholder = '%s',
+)
 
-query, params = ds.select(
-    columns=['id', 'first_name', 'email'],
-    filters=[
-        {'field': 'first_name', 'operator': 'icontains', 'value': 'john'},
-        {'field': 'status', 'operator': '=', 'value': 'active'}
+query, values = ds.select(
+    columns = [
+        {'field': 'id'},
+        {'field': 'first_name'},
+        {'field': 'last_name'},
     ],
-    order=[{'field': 'id', 'order': 'desc'}]
+    filters = [
+        {'field': 'first_name', 'operator': 'icontains', 'value': 'John'},
+        {'field': 'last_name',  'operator': 'icontains', 'value': 'Smith'},
+    ],
+    order = [{'field': 'first_name', 'order': 'asc'}],
+    limit = {'start': 0, 'length': 10},
 )
 
-print(query)                                                    
-print(params)
+print(query)
+# select
+#   "id",
+#   "first_name",
+#   "last_name"
+# from
+#   "users"
+# where
+#   ("first_name" ilike '%' || %s || '%' and "last_name" ilike '%' || %s || '%')
+# order by
+#   "first_name" asc
+# limit 10 offset 0
 
-rows = execute_db(query, values)
-```
-## Core Concepts
+print(values)
+# ['John', 'Smith']
 
-```python
-columns = ['id', 'first_name']                    # simple
-```
-or
-```python
-columns = [
-    {'field': 'first_name', 'alias': 'First Name'},
-    {'field': 'created_at', 'raw': True}          # raw SQL
-]
-```
-
-## CRUD Operations (Insert, Update, Delete)
-
-filtersql allows you to write, modify, and delete rows safely and cleanly.
-
-### Insert
-
-To insert a record into a table, pass your column-value dictionary to `insert()`:
-
-```python
-import filtersql
-
-ds = filtersql.Datasource(source='users', dbms='Pg', placeholder='%s')
-
-query, values = ds.insert(  
-    values = {  
-        'first_name': 'John',  
-        'last_name': 'Smith',  
-        'email': 'john.smith@example.com'  
-    }  
-)
-
-print(query)  
-# insert into "users"  
-#   ("first_name", "last_name", "email")  
-# values  
-#   (%s, %s, %s)
-
-print(values)  
-# ['John', 'Smith', 'john.smith@example.com']
+rows = cursor.execute(query, values).fetchall()
 ```
 
-#### PostgreSQL returning
-
-If you are using PostgreSQL, you can request that the statement returns a generated key (like an auto-incrementing ID) using the returning argument:
-
-```python
-query, values = ds.insert(  
-    values    = {'first_name': 'John', 'last_name': 'Bobs'},  
-    returning = 'id'  
-)
-
-print(query)  
-# insert into "users"  
-#   ("first_name", "last_name")  
-# values  
-#   (%s, %s)  
-# returning "id"
-```
-
-### Update
-
-Updating rows requires an id dictionary (to target rows using exact match equality =) and a values dictionary for the updated data:
-
-```python
-import filtersql
-
-ds = filtersql.Datasource(source='users', dbms='Pg', placeholder='%s')
-
-query, values = ds.update(  
-    id     = {'id': 42, 'tenant_id': 1},  
-    values = {'first_name': 'Johnny', 'status': 'active'}  
-)
-
-print(query)  
-# update  
-#   "users"  
-# set  
-#   "first_name" = %s,  
-#   "status" = %s  
-# where  
-#   ("id" = %s and "tenant_id" = %s)
-
-print(values)  
-# ['Johnny', 'active', 42, 1]
-```
-
-### Delete
-
-Deleting records requires only an id lookup coordinate dictionary:
-
-```python
-import filtersql
-
-ds = filtersql.Datasource(source='users', dbms='Pg', placeholder='%s')
-
-query, values = ds.delete(  
-    id = {'id': 42, 'tenant_id': 1}  
-)
-
-print(query)  
-# delete from  
-#   "users"  
-# where  
-#   ("id" = %s and "tenant_id" = %s)
-
-print(values)  
-# [42, 1]
-```
+---
 
 ## Filters
 
-### AND filters (default)
+### Filter format
 
-By default, flat lists of dictionaries are combined with `AND` operators:
+Every filter is a dict with three keys:
 
 ```python
-filters = [  
-    {'field': 'status',   'operator': '=',         'value': 'active'},  
-    {'field': 'doc_date', 'operator': '>=',        'value': '2025-01-01'},  
-    {'field': 'title',    'operator': 'icontains', 'value': 'oxygen'},  
-]  
-# -> status = %s AND doc_date >= %s AND title ILIKE %s
+{'field': 'status', 'operator': '=', 'value': 'active'}
 ```
 
-### **OR groups**
+- `field` - column name, JSONB path (`attributes->>amount`), or schema-prefixed (`m.doc_type`)
+- `operator` - the comparison operator (see table below)
+- `value` - the value to compare against
 
-Group conditions under `OR` logic by nesting them under the `'or'` key:
+A flat list of filters is joined with AND:
 
 ```python
-filters = [  
-    {'field': 'status', 'operator': '=', 'value': 'active'},  
-    {'or': [  
-        {'field': 'first_name', 'operator': 'icontains', 'value': 'john'},  
-        {'field': 'last_name',  'operator': 'icontains', 'value': 'john'},  
-    ]},  
-]  
-# -> status = %s AND (first_name ILIKE %s OR last_name ILIKE %s)
+filters = [
+    {'field': 'status',   'operator': '=',         'value': 'active'},
+    {'field': 'doc_date', 'operator': '>=',        'value': '2025-01-01'},
+    {'field': 'title',    'operator': 'icontains', 'value': 'oxygen'},
+]
+```
+
+Some operators don't need a value:
+
+```python
+{'field': 'deleted_at', 'operator': 'null'}
+{'field': 'deleted_at', 'operator': 'notnull'}
+```
+
+Some operators take a list:
+
+```python
+{'field': 'status',   'operator': 'in',      'value': ['active', 'pending']}
+{'field': 'doc_date', 'operator': 'between', 'value': ['2025-01-01', '2025-12-31']}
+```
+
+### OR groups
+
+Wrap filters in a dict with key `'or'`:
+
+```python
+filters = [
+    {'field': 'status', 'operator': '=', 'value': 'active'},
+    {'or': [
+        {'field': 'first_name', 'operator': 'icontains', 'value': 'john'},
+        {'field': 'last_name',  'operator': 'icontains', 'value': 'john'},
+    ]},
+]
+# → "status" = ? AND ("first_name" like '%'||?||'%' OR "last_name" like '%'||?||'%')
 ```
 
 ### Nesting
 
-You can nest `AND` inside `OR` and vice versa:
+OR groups can contain AND groups and vice versa:
 
 ```python
-filters = [  
-    {'or': [  
-        {'field': 'doc_type', 'operator': '=', 'value': 'CONTRACT'},  
-        {'and': [  
-            {'field': 'doc_type', 'operator': '=',   'value': 'ORDER'},  
-            {'field': 'amount',   'operator': '>=',  'value': '10000'},  
-        ]},  
-    ]},  
-]  
-# -> (doc_type = %s OR (doc_type = %s AND amount >= %s))
+filters = [
+    {'or': [
+        {'field': 'doc_type', 'operator': '=', 'value': 'CONTRACT'},
+        {'and': [
+            {'field': 'doc_type', 'operator': '=',  'value': 'ORDER'},
+            {'field': 'amount',   'operator': '>=', 'value': '10000'},
+        ]},
+    ]},
+]
+# → ("doc_type" = ? OR ("doc_type" = ? AND "amount" >= ?))
 ```
 
-## Using filtersql with AI / LLM pipelines
+### scope
 
-The premise is straightforward: ask your LLM to output a clean JSON representing only target filters, validate it using Pydantic, and let filtersql assemble the actual, secure SQL query. The values are always passed as parameters so there is no risk of SQL injection even if the model produces unexpected output.
-
-### Basic flow
-
-user question -> LLM -> JSON -> Pydantic -> filtersql -> parameterized SQL
-
-### Define the Pydantic schema
-
-You tell the LLM exactly which fields and operators it can use. Anything outside the list gets rejected by Pydantic before it reaches the database.
+`scope` is a dict of fixed `field: value` pairs applied as `=` filters to every operation on the Datasource - select, where, update, delete, and insert.
 
 ```python
-from pydantic import BaseModel, Field  
+ds = filtersql.Datasource(
+    source      = 'documents',
+    dbms        = 'Pg',
+    placeholder = '%s',
+    scope       = {'tenant_id': 42},
+)
+
+# scope is always added
+query, values = ds.select(columns=columns, filters=user_filters)
+# → ... WHERE "tenant_id" = %s AND ...
+
+query, values = ds.delete(id={'id': 99})
+# → ... WHERE "id" = %s AND "tenant_id" = %s
+
+query, values = ds.insert(values={'title': 'New doc'})
+# → INSERT INTO "documents" ("title", "tenant_id") VALUES (%s, %s)
+```
+
+---
+
+## Columns
+
+Columns are passed per call to `select()`, not at construction time - they can be computed at runtime.
+
+Each column is a dict with a `field` key. Any extra keys (`label`, `visible`, `editable` etc.) are ignored by filtersql and can be used by your frontend layer:
+
+```python
+columns = [
+    {'field': 'id',         'label': 'ID',         'visible': True,  'editable': False},
+    {'field': 'first_name', 'label': 'First Name', 'visible': True,  'editable': True},
+    {'field': 'last_name',  'label': 'Last Name',  'visible': True,  'editable': True},
+]
+```
+
+Plain strings also work:
+
+```python
+columns = ['id', 'first_name', 'last_name']
+```
+
+Raw expressions with `raw=True`:
+
+```python
+columns = [
+    {'field': 'COUNT(*) as total', 'raw': True},
+    {'field': 'MAX(age) as max_age', 'raw': True},
+]
+```
+
+---
+
+## Insert, update, delete
+
+All three return `(query, values)` like `select()`.
+
+```python
+# insert
+query, values = ds.insert(
+    values = {'first_name': 'John', 'last_name': 'Smith'},
+)
+
+# insert with returning (PostgreSQL only)
+query, values = ds.insert(
+    values    = {'first_name': 'John'},
+    returning = 'id',
+)
+
+# update - id can be single or composite key
+query, values = ds.update(
+    id     = {'id': 42},
+    values = {'first_name': 'John', 'status': 'active'},
+)
+# values order: SET values first, then WHERE values
+# → ['John', 'active', 42]
+
+# delete
+query, values = ds.delete(id={'id': 42})
+```
+
+---
+
+## where() - just the WHERE clause
+
+When you want to inject filters into your own handwritten query:
+
+```python
+ds = filtersql.Datasource(source='documents', dbms='Pg', placeholder='%s')
+
+where_clause, values = ds.where(filters=[
+    {'field': 'doc_type', 'operator': '=',  'value': 'CONTRACT'},
+    {'field': 'doc_date', 'operator': '>=', 'value': '2025-01-01'},
+])
+# → '("doc_type" = %s and "doc_date" >= %s)'
+# → ['CONTRACT', '2025-01-01']
+
+query = f"""
+    SELECT v.chunk, m.doc_type
+    FROM file_vectors v
+    JOIN file_metadata m ON v.sha256 = m.sha256
+    WHERE v.model_name = %s
+    AND {where_clause}
+    ORDER BY v.embedding <=> %s
+"""
+```
+
+---
+
+## filtersql() - convenience function
+
+Builds any query from a single payload dict. Useful for REST APIs and AI-generated actions:
+
+```python
+from filtersql import filtersql
+
+query, values = filtersql(
+    payload = {
+        'action':  'select',
+        'source':  'users',
+        'columns': [{'field': 'id'}, {'field': 'first_name'}],
+        'filters': [{'field': 'status', 'operator': '=', 'value': 'active'}],
+        'order':   [{'field': 'id', 'order': 'asc'}],
+        'limit':   {'start': 0, 'length': 10},
+    },
+    dbms        = 'Pg',
+    placeholder = '%s',
+)
+```
+
+Supported actions: `select`, `insert`, `update`, `delete`.
+
+---
+
+## debug()
+
+Replaces placeholders with actual values for logging. Never use the output as real SQL.
+
+```python
+query, values = ds.select(columns=columns, filters=filters)
+print(ds.debug(query, values))
+# select
+#   "id",
+#   "first_name"
+# from
+#   "users"
+# where
+#   ("first_name" ilike '%' || 'John' || '%')
+```
+
+---
+
+## AI / LLM pipelines
+
+The LLM generates a JSON payload. filtersql compiles it to SQL. The values are always parameterized - no SQL injection risk even if the model produces unexpected output.
+
+```
+user question → LLM → JSON → filtersql → parameterized SQL
+```
+
+The simplest version without Pydantic:
+
+```python
+import json
+from google import genai
+from filtersql import filtersql
+
+SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "source": {"type": "STRING", "enum": ["users", "contracts"]},
+        "filters": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "field":    {"type": "STRING"},
+                    "operator": {"type": "STRING", "enum": ["=", "!=", ">", ">=", "<", "<=", "icontains", "in"]},
+                    "value":    {"type": "STRING"}
+                },
+                "required": ["field", "operator", "value"]
+            }
+        }
+    },
+    "required": ["source", "filters"]
+}
+
+response = client.models.generate_content(
+    model='gemini-flash',
+    contents=user_question,
+    config=genai.types.GenerateContentConfig(
+        system_instruction="Convert user questions into SQL filter payloads.",
+        response_mime_type="application/json",
+        response_schema=SCHEMA,
+        temperature=0.0,
+    )
+)
+
+payload = json.loads(response.text)
+query, values = filtersql(payload, action='select', dbms='SQLite', placeholder='?')
+```
+
+With Pydantic for stricter validation:
+
+```python
+from pydantic import BaseModel, Field
 from typing import List, Literal
 
-class SQLFilterSchema(BaseModel):  
-    field: Literal[  
-        'doc_type',  
-        'doc_date',  
-        'author',  
-        'title',  
-        'attributes->>supplier',  
-        'attributes->>amount',  
-    ] = Field(description="Column name or JSONB path")  
-    operator: Literal[  
-        '=', '!=', '>', '>=', '<', '<=',  
-        'icontains', 'istarts_with',  
-        'in', 'notin', 'null', 'notnull'  
-    ] = Field(description="Comparison operator")  
-    value: str = Field(description="Value to search for")
+class SQLFilter(BaseModel):
+    field: Literal['doc_type', 'doc_date', 'author', 'title']
+    operator: Literal['=', '!=', '>', '>=', '<', '<=', 'icontains', 'between', 'in', 'notin']
+    value: str
 
-class QuerySchema(BaseModel):  
-    semantic_query: str = Field(description="Cleaned query for vector/FTS search")  
-    sql_filters: List[SQLFilterSchema] = Field(description="SQL filters")
-```
+class QuerySchema(BaseModel):
+    semantic_query: str
+    sql_filters: List[SQLFilter]
 
-### Call the LLM with structured output
-
-```python
-ai_response = ai_client.models.generate_content(  
-    model='gemini-flash',  
-    contents=user_question,  
-    config=GenerateContentConfig(  
-        system_instruction=YOUR_INTENT_PARSER_PROMPT,  
-        response_mime_type="application/json",  
-        response_schema=QuerySchema,  
-        temperature=0.0,  
-    )  
-)  
-parsed = QuerySchema.model_validate_json(ai_response.text)
-```
-
-### Build only the WHERE clause
-
-Sometimes you don't want a full `SELECT`, you just want to inject dynamic filters into an existing query.
-
-```python
-import filtersql
-
+parsed = QuerySchema.model_validate_json(response.text)
 filters = [f.model_dump() for f in parsed.sql_filters]
 
-ds = filtersql.Datasource(source = 'documents', dbms = 'Pg', placeholder = '%s')
-
-where_clause, values = ds.where(filters=filters)  
-# where_clause: '("doc_type"=%s and "doc_date">=%s)'  
-# values:       ['CONTRACT', '2025-01-01']
+ds = filtersql.Datasource(source='documents', dbms='Pg', placeholder='%s')
+where_clause, values = ds.where(filters=filters)
 ```
 
-### JSONB fields and value_type
-
-When a JSONB field contains numeric or date values, add `value_type` to get the right Postgres cast:
+### JSONB and value_type (PostgreSQL)
 
 ```python
-{'field': 'attributes->>amount',      'operator': '>=', 'value': '10000',     'value_type': 'numeric'}  
-# -> ("attributes"->>'amount')::numeric >= %s::numeric
+{'field': 'attributes->>amount',  'operator': '>=', 'value': '10000',     'value_type': 'numeric'}
+# → ("attributes"->>'amount')::numeric >= %s::numeric
 
-{'field': 'attributes->>expiry_date', 'operator': '<=', 'value': '2025-12-31', 'value_type': 'date'}  
-# -> ("attributes"->>'expiry_date')::date <= %s::date
+{'field': 'attributes->>expiry',  'operator': '<=', 'value': '2025-12-31', 'value_type': 'date'}
+# → ("attributes"->>'expiry')::date <= %s::date
 ```
 
-Without the cast, Postgres performs text comparisons, leading to incorrect results for numeric ranges (e.g., `'9' > '10'`).
+Without the cast, `'9' > '10'` as text gives wrong results for numeric ranges.
 
-## Full-text search (PostgreSQL and MySQL only)
+---
 
-Two operators for full-text search using `websearch_to_tsquery`:
+## Cursor-based pagination
 
-### fts (for a pre-built tsvector column)
+Navigates large tables without OFFSET - no performance degradation.
 
 ```python
-{'field': 'tsv_content', 'operator': 'fts', 'value': 'oxygen supply'}  
-# -> "tsv_content" @@ websearch_to_tsquery('english', %s)
+ds = filtersql.Datasource(
+    source = 'documents',
+    dbms   = 'Pg',
+    order  = [{'field': 'id', 'order': 'asc'}],
+)
+
+# forward
+query, values = ds.select(
+    columns   = columns,
+    cursor    = {'id': last_seen_id},
+    direction = 'next',
+)
+
+# backward
+query, values = ds.select(
+    columns   = columns,
+    cursor    = {'id': last_seen_id},
+    direction = 'prev',
+)
+
+# jump to specific record
+query, values = ds.select(
+    columns   = columns,
+    cursor    = {'id': 42},
+    direction = 'seek',
+)
 ```
 
-### fts_query (builds the tsvector on the fly from a text column)
+| `direction` | SQL | Use case |
+|---|---|---|
+| `'next'` | `field > last_value` | Forward navigation |
+| `'prev'` | `field < last_value` | Backward navigation |
+| `'seek'` | `field = value` | Jump to specific record |
+
+Multi-column cursors work too:
 
 ```python
-{'field': 'description', 'operator': 'fts_query', 'value': 'oxygen supply'}  
-# -> to_tsvector('english', coalesce("description", '')) @@ websearch_to_tsquery('english', %s)
+query, values = ds.select(
+    columns   = columns,
+    cursor    = {'first_name': last_first, 'last_name': last_last},
+    direction = 'next',
+)
 ```
 
-Default language is `'english'`. You can change it globally on initialization:
+---
+
+## Full-text search
+
+### PostgreSQL
 
 ```python
+# pre-built tsvector column
+{'field': 'tsv_content', 'operator': 'fts', 'value': 'oxygen supply'}
+# → "tsv_content" @@ websearch_to_tsquery('english', %s)
+
+# on the fly from a text column
+{'field': 'description', 'operator': 'fts_query', 'value': 'oxygen supply'}
+# → to_tsvector('english', coalesce("description", '')) @@ websearch_to_tsquery('english', %s)
+
 ds = filtersql.Datasource(..., fts_language='italian')
 ```
 
 ### MySQL
 
-MySQL FTS uses `MATCH() AGAINST()` in BOOLEAN MODE:
-
 ```python
 {'field': 'content', 'operator': 'fts', 'value': 'oxygen supply'}
-# -> match("content") against(? in boolean mode)
-```
-Note: Requires a FULLTEXT index on the column.
-
-## Flask + DataTables example
-
-```python
-import filtersql  
-from filtersql.utils import parseDatatableArgs
-
-@app.route("/api/table.json")  
-def table_json():  
-    a = parseDatatableArgs(request.args)
-
-    columns = [  
-        {'field': 'id'},  
-        {'field': 'first_name'},  
-        {'field': 'last_name'},  
-        {'field': 'company_name'},  
-    ]
-
-    # build filters from DataTable per-column search  
-    filters = []  
-    for k in a['columns'].values():  
-        if k['search']['value']:  
-            col = columns[int(k['data'])]  
-            filters.append({  
-                'field':    col['field'],  
-                'operator': 'icontains',  
-                'value':    k['search']['value'],  
-            })
-
-    # build order from DataTable  
-    order = [  
-        {'field': columns[int(k['column'])]['field'], 'order': k['dir']}  
-        for k in a['order'].values()  
-    ]
-
-    ds = filtersql.Datasource(  
-        source = 'sample_uk',  
-        dbms   = 'SQLite',  
-    )
-
-    query, values = ds.select(columns=columns)  
-    records_total = execute_db("select count(*) from ({}) t".format(query), values)[0][0]
-
-    query, values = ds.select(columns=columns, filters=filters)  
-    records_filtered = execute_db("select count(*) from ({}) t".format(query), values)[0][0]
-
-    query, values = ds.select(  
-        columns = columns,  
-        filters = filters,  
-        order   = order,  
-        limit   = {'start': int(request.args.get('start')), 'length': int(request.args.get('length'))},  
-    )  
-    rows = execute_db(query, values)
-
-    return jsonify(  
-        draw            = int(request.args.get('draw')),  
-        recordsTotal    = records_total,  
-        recordsFiltered = records_filtered,  
-        data            = rows,  
-    )
+# → match("content") against(? in boolean mode)
 ```
 
-## Access-style pagination
-
-Cursor-based pagination without offset. Useful for large tables where `LIMIT x OFFSET y` gets slow, or when you need to navigate record by record like in Microsoft Access.
-
-```python
-ds = filtersql.Datasource(  
-    source = 'sample_uk',  
-    dbms   = 'SQLite',  
-    move   = 'forwards',  
-    order  = [{'field': 'id', 'order': 'asc'}],  
-)
-
-# Pass the cursor coordinates explicitly into the filters argument using type='move'  
-cursor_filters = [{'field': 'id', 'value': last_seen_id, 'type': 'move'}]
-
-query, values = ds.select(columns=columns, filters=cursor_filters)
-```
-
-Use `move='backwards'` to go in reverse, or `move='find'`
-to jump to a specific record. Multi-column cursors are supported,
-just add more entries to the filters list with `type='move'`.
+---
 
 ## Filter operators
 
 | Operator | Description |
-| :---- | :---- |
+|---|---|
 | `=` `!=` `>` `>=` `<` `<=` | Comparison |
-| `between` | Range - value must be a list of two items [low, high] |
-| `contains` | Case-sensitive substring (LIKE '%x%') |
+| `between` | Range - value must be `[low, high]` |
+| `contains` | Case-sensitive substring |
 | `starts_with` | Case-sensitive prefix |
 | `ends_with` | Case-sensitive suffix |
 | `not_contains` | Case-sensitive substring exclusion |
 | `not_starts_with` | Case-sensitive prefix exclusion |
-| `icontains` | Case-insensitive substring (ILIKE) |
+| `icontains` | Case-insensitive substring |
 | `istarts_with` | Case-insensitive prefix |
 | `iends_with` | Case-insensitive suffix |
 | `not_icontains` | Case-insensitive substring exclusion |
-| `null` / `notnull` | NULL checks (no value bound) |
+| `null` / `notnull` | NULL checks - no value needed |
 | `in` / `notin` | List membership |
-| `reverse_in` | Value in a set of columns - %s IN (col1, col2) |
+| `reverse_in` | Value in a set of columns - `? IN (col1, col2)` |
 | `regexp` | Case-sensitive regular expression |
-| `iregexp` | Case-insensitive regular expression (Pg: ~*, Oracle: regexp_like with i) |
-| `fts` | Full-text search on tsvector column (Pg only) |
+| `iregexp` | Case-insensitive regexp (Pg: `~*`, Oracle: `regexp_like` with `i`) |
+| `fts` | Full-text search on indexed column (Pg, MySQL) |
 | `fts_query` | Full-text search on text column (Pg only) |
 
-## **Supported Engines**
+---
 
-We support standard dialect mappings out of the box. The parameter placeholder token defaults to `'?'` for all systems,
-but can be manually overridden via constructor kwargs:
+## Supported databases
 
-| DBMS | dbms value |
-| :---- | :---- |
-| PostgreSQL | `'Pg'` |
-| SQLite | `'SQLite'` |
-| MySQL | `'mysql'` |
-| Oracle | `'Oracle'` |
+| DBMS | `dbms` value | Default placeholder |
+|---|---|---|
+| PostgreSQL | `'Pg'` | `?` |
+| SQLite | `'SQLite'` | `?` |
+| MySQL | `'mysql'` | `?` |
+| Oracle | `'Oracle'` | `?` |
 
-Need a custom placeholder (like `%s`, `:val` or `$1`)? Just override it:
+Override with any placeholder your driver expects:
 
 ```python
-ds = filtersql.Datasource(..., placeholder=':val')
+ds = filtersql.Datasource(..., placeholder='%s')   # psycopg2
+ds = filtersql.Datasource(..., placeholder=':val')  # cx_Oracle named
 ```
+
+---
+
+## Examples
+
+Working examples are in the `/examples` folder:
+
+- `examples/datatables/` - Flask + DataTables server-side with column filters and global search
+- `examples/pagination/` - REST API gateway with security whitelist for insert/update/delete
+- `examples/ai/` - Gemini structured output → filtersql → SQLite
+
+---
 
 ## License
 

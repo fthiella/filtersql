@@ -259,12 +259,9 @@
 
                 if ((mode === 'next' || mode === 'prev') && this.currentRecord) {
                     payload.direction = mode;
-                    payload.filters.push({ 
-                        type: 'move', 
-                        field: 'id', 
-                        operator: '=', 
-                        value: this.currentRecord.id 
-                    });
+                    payload.cursor = { 
+                        id: this.currentRecord.id 
+                    };
                 }
 
                 try {
