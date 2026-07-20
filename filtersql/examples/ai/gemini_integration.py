@@ -12,6 +12,9 @@ import json
 from google import genai
 from filtersql import filtersql
 
+from dotenv import load_dotenv
+load_dotenv()
+
 # ============================================================================
 # CONFIGURATION
 # ============================================================================

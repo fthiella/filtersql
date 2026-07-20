@@ -369,7 +369,11 @@ class Datasource:
         return "\n".join(segments), where_values
 
     def debug(self, query: str, values: list) -> str:
-        """Returns query with placeholders replaced by actual values, for debugging."""
+        """
+        Returns query with placeholders replaced by actual values
+        WARNING: This method outputs raw SQL with interpolated values.
+        Only use for debugging in development environments.
+        """
         debug_query = query
         for val in values:
             if isinstance(val, str):
@@ -617,6 +621,21 @@ class Datasource:
         WARNING: If raw_source=True, the source string is used directly 
         in the SQL query. This is a SQL injection risk if the source
         contains untrusted input. Only use with trusted, hardcoded values.
+
+        Example of safe usage:
+                # Hardcoded subquery - safe
+                ds = Datasource(
+                    source="(SELECT * FROM users WHERE active = true) AS active_users",
+                    raw_source=True,
+                    dbms='Pg'
+                )
+                
+                # User-provided table name - UNSAFE!
+                ds = Datasource(
+                    source=request.GET.get('table'),  # NEVER DO THIS
+                    raw_source=True,
+                    dbms='Pg'
+                )
         """
         if self.raw_source:
             # Intentionally raw for subquery injection

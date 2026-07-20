@@ -1134,7 +1134,7 @@ class TestFiltersqlFunction(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestCursorPagination(unittest.TestCase):
-    """Test keyset pagination with type='move' filters."""
+    """Test keyset pagination with cursor dict."""
 
     def test_next_single_column(self):
         ds = make_ds(order=[{'field': 'id', 'order': 'asc'}])
@@ -1240,11 +1240,11 @@ class TestCursorPagination(unittest.TestCase):
     def test_cursor_with_order_direction_inversion(self):
         """When direction='prev', order should be inverted."""
         ds = make_ds(
-            order=[{'field': 'id', 'order': 'asc'}],
-            direction='prev'
+            order=[{'field': 'id', 'order': 'asc'}]
         )
         q, v = get_query(ds,
-            cursor={'id': 100}
+            cursor={'id': 100},
+            direction='prev'
         )
         self.assertIn('"id" desc', q)  # Order inverted for prev
         self.assertIn('"id" < %s', q)     # And condition uses <

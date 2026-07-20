@@ -20,6 +20,7 @@ classifiers = [
     "Topic :: Database",
     "Topic :: Software Development :: Libraries :: Python Modules"
 ]
+dependencies = []
 
 [tool.setuptools.dynamic]
 version = {attr = "filtersql.__version__"}

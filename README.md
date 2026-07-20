@@ -1,9 +1,9 @@
 # filtersql
 
-A Python library that compiles structured filter dicts into safe, parameterized SQL.
+A Python library that compiles structured JSON into safe, parameterized SQL.
 
 ```
-filters (plain Python dicts) → filtersql → SQL string + values list
+JSON payload (or Python dicts) → filtersql → SQL string + values list
 ```
 
 It's not an ORM or a connection manager. It builds the query and returns it.
@@ -17,6 +17,24 @@ Designed for three use cases:
 - **AI/LLM filter pipelines** - the most interesting one
 
 Supports PostgreSQL, SQLite, MySQL, and Oracle.
+
+## Features
+
+- **Parameterized by default** - SQL injection safe
+- **Multi-database** - SQLite, Pg, MySQL, Oracle
+- **No ORM overhead** - works with any DB driver
+- **JSON/Protocol** - language-agnostic payload
+- **Keyset pagination** - no OFFSET performance issues
+- **AI-ready** - designed for LLM output
+
+## Comparison
+
+| Tool | Query Builder | Multi-DB | JSON Payload | AI-Ready |
+|------|---------------|----------|--------------|----------|
+| **filtersql** | ✅ | ✅ | ✅ | ✅ |
+| SQLAlchemy | ✅ | ✅ | ❌ | ❌ |
+| PyPika | ✅ | ✅ | ❌ | ❌ |
+| Django ORM | ✅ | ✅ | ❌ | ❌ |
 
 ---
 
@@ -69,7 +87,8 @@ print(query)
 print(values)
 # ['John', 'Smith']
 
-rows = cursor.execute(query, values).fetchall()
+cursor.execute(query, values)
+rows = cursor.fetchall()
 ```
 
 ---

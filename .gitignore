@@ -132,3 +132,4 @@ filtersql/tests/sql_pg_test.py.2.old
 filtersql/tests/sql_pg_test.py.old
 *.db
 *.old
+SPECS.base64
