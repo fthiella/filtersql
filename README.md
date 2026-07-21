@@ -20,21 +20,22 @@ Supports PostgreSQL, SQLite, MySQL, and Oracle.
 
 ## Features
 
-- **Parameterized by default** - SQL injection safe
-- **Multi-database** - SQLite, Pg, MySQL, Oracle
-- **No ORM overhead** - works with any DB driver
-- **JSON/Protocol** - language-agnostic payload
-- **Keyset pagination** - no OFFSET performance issues
-- **AI-ready** - designed for LLM output
+- **Secure by default** - Fully parameterized queries, protected against SQL injection
+- **Multi-database support** - PostgreSQL, SQLite, MySQL, and Oracle
+- **Lightweight** - No ORM required. Works with any database driver (psycopg2, sqlite3, mysql-connector, cx_Oracle, etc.)
+- **Language-agnostic** - Clean JSON protocol, perfect for REST APIs and frontend applications
+- **High-performance pagination** - Keyset (cursor-based) pagination, avoiding slow `OFFSET` queries
+- **AI/LLM friendly** - Designed for structured output from large language models
 
 ## Comparison
 
-| Tool | Query Builder | Multi-DB | JSON Payload | AI-Ready |
-|------|---------------|----------|--------------|----------|
-| **filtersql** | ✅ | ✅ | ✅ | ✅ |
-| SQLAlchemy | ✅ | ✅ | ❌ | ❌ |
-| PyPika | ✅ | ✅ | ❌ | ❌ |
-| Django ORM | ✅ | ✅ | ❌ | ❌ |
+| Tool                  | Query Builder | Multi-DB | JSON Payload | Keyset Pagination | AI/LLM Ready |
+|-----------------------|---------------|----------|--------------|-------------------|--------------|
+| **filtersql**         | Yes           | Yes      | Yes          | Yes               | Yes          |
+| SQLAlchemy            | Yes           | Yes      | No           | Partial           | No           |
+| PyPika                | Yes           | Yes      | No           | No                | No           |
+| Django ORM            | Yes           | Yes      | No           | No                | No           |
+| sqlalchemy-filterset  | Yes           | Yes      | Partial      | No                | No           |
 
 ---
 

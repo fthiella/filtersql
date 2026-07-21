@@ -1365,5 +1365,143 @@ class TestMySQLFts(unittest.TestCase):
         self.assertIn('match(`content`)', q)
         self.assertEqual(v, ['published', 'mysql search'])
 
+class TestQuoteEdgeCases(unittest.TestCase):
+    """Test edge cases and security for _quote()."""
+
+    def _q(self, name, dbms='Pg'):
+        """Helper per chiamare _quote()."""
+        ds = sql.Datasource(source='t', dbms=dbms)
+        quote = sql.DBMS_MAP[dbms]['quote']
+        return ds._quote(name, quote)
+
+    def test_quote_with_double_dot(self):
+        """Too many dots should be rejected."""
+        with self.assertRaises(InvalidIdentifierError):
+            self._q('a.b.c.d')
+
+    def test_quote_with_jsonb_path_and_injection(self):
+        """JSONB path should be safe."""
+        result = self._q('data->>name')
+        self.assertIn("'name'", result)
+
+    def test_quote_with_jsonb_path_containing_quote(self):
+        """JSONB path with quotes should be escaped."""
+        result = self._q("data->>name'")
+        self.assertIsNotNone(result)
+
+    def _q(self, name, dbms='Pg'):
+        ds = sql.Datasource(source='t', dbms=dbms)
+        quote = sql.DBMS_MAP[dbms]['quote']
+        return ds._quote(name, quote)
+
+    def test_quote_with_double_dot(self):
+        """Too many dots should be rejected."""
+        with self.assertRaises(InvalidIdentifierError):
+            self._q('a.b.c.d')
+
+    def test_quote_with_sql_keyword_injection(self):
+        """SQL keywords in identifier should be quoted, not executed."""
+        result = self._q('select')
+        self.assertEqual(result, '"select"')
+
+    def test_quote_with_unicode_normalization(self):
+        """Unicode identifiers should work."""
+        result = self._q('café')
+        self.assertEqual(result, '"café"')
+
+    def test_quote_with_underscore(self):
+        """Underscore is valid."""
+        result = self._q('first_name')
+        self.assertEqual(result, '"first_name"')
+
+    def test_quote_with_hyphen(self):
+        """Hyphen is valid."""
+        result = self._q('first-name')
+        self.assertEqual(result, '"first-name"')
+
+class TestCursorViaFiltersqlFunction(unittest.TestCase):
+    """Test cursor parameter via filtersql() function."""
+
+    def test_cursor_via_payload(self):
+        q, v = sql.filtersql(
+            payload={
+                'action': 'select',
+                'source': 'users',
+                'columns': ['id', 'name'],
+                'cursor': {'id': 100},
+                'direction': 'next',
+                'order': [{'field': 'id', 'order': 'asc'}]
+            },
+            dbms='Pg',
+            placeholder='%s'
+        )
+        self.assertIn('"id" > %s', q)
+        self.assertEqual(v, [100])
+
+    def test_cursor_via_kwargs(self):
+        q, v = sql.filtersql(
+            action='select',
+            source='users',
+            columns=['id', 'name'],
+            cursor={'id': 100},
+            direction='next',
+            order=[{'field': 'id', 'order': 'asc'}],
+            dbms='Pg'
+        )
+        self.assertIn('"id" > ?', q)
+        self.assertEqual(v, [100])
+
+    def test_cursor_with_payload_and_kwargs(self):
+        payload = {
+            'action': 'select',
+            'source': 'users',
+            'columns': ['id', 'name']
+        }
+        q, v = sql.filtersql(
+            payload,
+            cursor={'id': 100},
+            direction='next',
+            dbms='Pg'
+        )
+        self.assertIn('"id" > ?', q)
+        self.assertEqual(v, [100])
+
+class TestColumnFeatures(unittest.TestCase):
+    """Test new column features: strings, alias, raw."""
+
+    def test_columns_as_strings(self):
+        ds = make_ds()
+        q, v = ds.select(columns=['id', 'name'])
+        self.assertIn('"id"', q)
+        self.assertIn('"name"', q)
+
+    def test_columns_with_alias(self):
+        ds = make_ds()
+        q, v = ds.select(columns=[
+            {'field': 'id', 'alias': 'user_id'},
+            {'field': 'name', 'alias': 'user_name'}
+        ])
+        self.assertIn('"id" as "user_id"', q)
+        self.assertIn('"name" as "user_name"', q)
+
+    def test_columns_with_raw(self):
+        ds = make_ds()
+        q, v = ds.select(columns=[
+            {'field': 'COUNT(*)', 'raw': True, 'alias': 'total'}
+        ])
+        self.assertIn('COUNT(*) as "total"', q)
+        self.assertNotIn('"COUNT(*),"', q)
+
+    def test_columns_mixed(self):
+        ds = make_ds()
+        q, v = ds.select(columns=[
+            'id',
+            {'field': 'name', 'alias': 'full_name'},
+            {'field': 'COUNT(*)', 'raw': True, 'alias': 'total'}
+        ])
+        self.assertIn('"id"', q)
+        self.assertIn('"name" as "full_name"', q)
+        self.assertIn('COUNT(*) as "total"', q)
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

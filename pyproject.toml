@@ -22,6 +22,12 @@ classifiers = [
 ]
 dependencies = []
 
+[project.urls]
+Homepage = "https://github.com/fthiella/filtersql"
+Repository = "https://github.com/fthiella/filtersql"
+Documentation = "https://github.com/fthiella/filtersql#readme"
+Issues = "https://github.com/fthiella/filtersql/issues"
+
 [tool.setuptools.dynamic]
 version = {attr = "filtersql.__version__"}
 readme = {file = ["README.md"], content-type = "text/markdown"}

@@ -125,11 +125,8 @@ dmypy.json
 .pyre/
 t.py
 .pypirc
-filtersql/sql - Copy (2).py
-filtersql/sql - Copy.py
-filtersql/sql - Copy.py.old
-filtersql/tests/sql_pg_test.py.2.old
-filtersql/tests/sql_pg_test.py.old
+*.bak
 *.db
 *.old
 SPECS.base64
+todo.md

@@ -205,13 +205,16 @@ class Datasource:
                     raise ValidationError(f"Column dict missing 'field' or 'name': {x}")
                 
                 if x.get('raw', False):
-                    parsed_columns.append(str(field))  # raw SQL fragment
-                else:
-                    quoted = self._quote(field, quote_char)
-                    # Support alias
+                    raw_sql = str(field)
                     alias = x.get('alias') or x.get('as')
                     if alias:
-                        quoted += f" AS {self._quote(alias, quote_char)}"
+                        raw_sql += f" as {self._quote(alias, quote_char)}"
+                    parsed_columns.append(raw_sql)
+                else:
+                    quoted = self._quote(field, quote_char)
+                    alias = x.get('alias') or x.get('as')
+                    if alias:
+                        quoted += f" as {self._quote(alias, quote_char)}"
                     parsed_columns.append(quoted)
             else:
                 raise ValidationError(f"Invalid column format: {x}")
@@ -585,6 +588,8 @@ class Datasource:
     def _quote(self, name: str, quote: str) -> str:
         """
         Secure quoting that distinguishes between column and table context.
+        Uses standard SQL identifier escaping (doubling the quote character)
+        to allow any valid legacy column name safely.
         """
 
         if not name or not str(name).strip():
@@ -592,20 +597,46 @@ class Datasource:
 
         name = str(name).strip()
 
-        if '->>' in name:
-            col, path = name.split('->>', 1)
-            return f"{self._quote(col.strip(), quote)}->>'{path.strip().strip('\"\'')}'"
+        if name.startswith(quote) and name.endswith(quote):
+            return name
 
+        # 1. Parse JSONB expressions (Pg)
+        if '->>' in name or '->' in name:
+            # Dividiamo basandoci sugli operatori '->>' o '->'
+            # (In una regex, (?=...) è un lookahead che mantiene il delimitatore)
+            parts = re.split(r'(->>|->)', name)
+            
+            # La prima parte è la colonna principale, va quotata normalmente
+            safe_col = self._quote(parts[0].strip(), quote)
+            
+            # Ricostruiamo il resto del path in modo sicuro
+            safe_path = ""
+            for i in range(1, len(parts), 2):
+                operator = parts[i]
+                key = parts[i+1].strip().strip("\"'")
+                # Escaping degli apici singoli per la chiave JSON
+                safe_key = key.replace("'", "''")
+                safe_path += f"{operator}'{safe_key}'"
+                
+            return f"{safe_col}{safe_path}"
+
+        # 2. Parse dot notation (schema.table)
         if '.' in name:
             parts = [p.strip() for p in name.split('.') if p.strip()]
             if len(parts) > 2:
                 raise InvalidIdentifierError(f"Too many parts in identifier: {name}")
-            return ".".join(f"{quote}{p}{quote}" for p in parts)
+            return ".".join(self._quote(p, quote) for p in parts)
 
-        if not re.match(r'^[a-zA-Z0-9_\sÀ-ÿ\u0080-\uFFFF\-]+$', name, re.UNICODE):
-            raise InvalidIdentifierError(f"Invalid characters in identifier '{name}'.")
+        # 3. Security check: null bytes crash many underlying C drivers (e.g., psycopg2)
+        if '\x00' in name:
+            raise InvalidIdentifierError("Identifier contains null byte.")
 
-        return f"{quote}{name}{quote}"
+        # 4. Standard Identifier Escaping
+        # Pg/SQLite/Oracle: " becomes ""
+        # MySQL: ` becomes ``
+        escaped_name = name.replace(quote, quote * 2)
+
+        return f"{quote}{escaped_name}{quote}"
 
     def _invert_order(self, ord: str, inv: str) -> str:
         if ord not in ['asc', 'desc']:
