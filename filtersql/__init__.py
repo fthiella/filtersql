@@ -11,9 +11,7 @@ from .sql import (
     ConfigurationError,
     InvalidIdentifierError,
 )
-
 from .__version__ import __version__
-
 
 __all__ = [
     "Datasource",

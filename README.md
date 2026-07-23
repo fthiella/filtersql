@@ -1,20 +1,22 @@
 # filtersql
 
-A Python library that compiles structured JSON into safe, parameterized SQL.
+Frontends, REST APIs and LLMs naturally produce structured JSON - not SQL.
+`filtersql` defines a declarative JSON query language and compiles it
+into safe, parameterized SQL.
 
 ```
 JSON payload (or Python dicts) → filtersql → SQL string + values list
 ```
 
-It's not an ORM or a connection manager. It builds the query and returns it.
-Execution is always the caller's responsibility, this makes it work with any
-DB driver (psycopg2, sqlite3, cx_Oracle, mysql-connector) without any adapter code.
+It is intentionally not an ORM or a connection manager. It builds the query and returns it.
+Query execution remains the responsibility of the caller, making filtersql compatible
+with any Python DB driver.
 
 Designed for three use cases:
 
 - **DataTables** server-side backends
 - **Cursor-based pagination** (Access-style, no OFFSET)
-- **AI/LLM filter pipelines** - the most interesting one
+- **Deterministic LLM pipelines** - the LLM generates JSON, filtersql compiles it to safe SQL
 
 Supports PostgreSQL, SQLite, MySQL, and Oracle.
 
@@ -27,15 +29,55 @@ Supports PostgreSQL, SQLite, MySQL, and Oracle.
 - **High-performance pagination** - Keyset (cursor-based) pagination, avoiding slow `OFFSET` queries
 - **AI/LLM friendly** - Designed for structured output from large language models
 
-## Comparison
+## Why filtersql?
 
-| Tool                  | Query Builder | Multi-DB | JSON Payload | Keyset Pagination | AI/LLM Ready |
-|-----------------------|---------------|----------|--------------|-------------------|--------------|
-| **filtersql**         | Yes           | Yes      | Yes          | Yes               | Yes          |
-| SQLAlchemy            | Yes           | Yes      | No           | Partial           | No           |
-| PyPika                | Yes           | Yes      | No           | No                | No           |
-| Django ORM            | Yes           | Yes      | No           | No                | No           |
-| sqlalchemy-filterset  | Yes           | Yes      | Partial      | No                | No           |
+`filtersql` is intentionally:
+
+- stateless
+- deterministic
+- driver agnostic
+- parameterized
+- declarative
+- portable
+- JSON-first
+- LLM friendly
+
+Applications describe what they want. `filtersql` decides how to express it in SQL.
+
+## Example
+
+From JSON:
+
+```JSON
+{
+  "action": "select",
+  "source": "users",
+  "filters": [
+    {
+      "field": "name",
+      "operator": "icontains",
+      "value": "john"
+    }
+  ]
+}
+```
+
+to SQL:
+
+```SQL
+select
+  *
+from
+  "users"
+where
+  "name" ilike '%' || ? || '%'
+```
+
+with values:
+
+```JSON
+["john"]
+```
 
 ---
 
@@ -321,10 +363,22 @@ print(ds.debug(query, values))
 
 ## AI / LLM pipelines
 
-The LLM generates a JSON payload. filtersql compiles it to SQL. The values are always parameterized - no SQL injection risk even if the model produces unexpected output.
+LLMs should never generate SQL directly. They should generate structured intent. `filtersql` validates that intent and compiles it into parameterized SQL.
+The values are always parameterized - no SQL injection risk even if the model produces unexpected output.
 
 ```
 user question → LLM → JSON → filtersql → parameterized SQL
+```
+
+```python
+# DANGEROUS!
+# the naive approach everyone starts with
+query = f"SELECT * FROM users WHERE {llm_output}"  # SQL injection waiting to happen
+
+# with filtersql
+payload = json.loads(llm_response)
+query, values = filtersql(payload, dbms='Pg', placeholder='%s')
+cursor.execute(query, values)  # always parameterized, always safe
 ```
 
 The simplest version without Pydantic:
@@ -510,7 +564,7 @@ ds = filtersql.Datasource(..., fts_language='italian')
 
 | DBMS | `dbms` value | Default placeholder |
 |---|---|---|
-| PostgreSQL | `'Pg'` | `?` |
+| PostgreSQL | `'Pg'` | `%s` |
 | SQLite | `'SQLite'` | `?` |
 | MySQL | `'mysql'` | `?` |
 | Oracle | `'Oracle'` | `?` |
@@ -518,8 +572,8 @@ ds = filtersql.Datasource(..., fts_language='italian')
 Override with any placeholder your driver expects:
 
 ```python
-ds = filtersql.Datasource(..., placeholder='%s')   # psycopg2
-ds = filtersql.Datasource(..., placeholder=':val')  # cx_Oracle named
+ds = filtersql.Datasource(..., placeholder='%s')
+ds = filtersql.Datasource(..., placeholder=':val')
 ```
 
 ---

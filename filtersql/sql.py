@@ -3,8 +3,8 @@ import re
 
 DBMS_MAP = {
     'SQLite': {
-        "delimiter":   ',',
-        "quote":       '"',
+        "placeholder":         '?',
+        "quote":               '"',
         "search_map": {
             '=':               '{col} = {param}',
             '!=':              '{col} != {param}',
@@ -29,11 +29,11 @@ DBMS_MAP = {
             'not_icontains':   '{col} not like \'%\' || {param} || \'%\'',
             'regexp':          '{col} regexp {param}',
         },
-        "limit":  'limit {0}, {1}',
+        "limit":  'limit {start}, {length}',
     },
     'Pg': {
-        "delimiter":   ',',
-        "quote":       '"',
+        "placeholder":         '%s',
+        "quote":               '"',
         "search_map": {
             '=':               '{col} = {param}',
             '!=':              '{col} != {param}',
@@ -61,11 +61,11 @@ DBMS_MAP = {
             'regexp':          '{col} ~ {param}',
             'iregexp':         '{col} ~* {param}',
         },
-        "limit": 'limit {1} offset {0}',
+        "limit": 'limit {length} offset {start}',
     },
     'mysql': {
-        "delimiter": ',',
-        "quote":     '`',
+        "placeholder":         '?',
+        "quote":               '`',
         "search_map": {
             '=':               '{col} = {param}',
             '!=':              '{col} != {param}',
@@ -93,11 +93,11 @@ DBMS_MAP = {
             'regexp':          '{col} regexp {param}',
             'iregexp':         '{col} regexp {param}',
         },
-        "limit": 'limit {0}, {1}',
+        "limit": 'limit {start}, {length}',
     },
     'Oracle': {
-        "delimiter": ',',
-        "quote":     '"',
+        "placeholder":         '?',
+        "quote":               '"',
         "search_map": {
             '=':               '{col} = {param}',
             '!=':              '{col} != {param}',
@@ -123,9 +123,11 @@ DBMS_MAP = {
             'regexp':          'regexp_like({col}, {param})',
             'iregexp':         'regexp_like({col}, {param}, \'i\')',
         },
-        "limit": 'offset {0} rows fetch next {1} rows only'
+        "limit": 'offset {start} rows fetch next {length} rows only'
     }
 }
+
+DEFAULT_PAGE_LENGTH = 100
 
 class FilterSQLError(Exception):
     """Base class for exceptions in this module."""
@@ -173,7 +175,7 @@ class Datasource:
         self.scope           = scope or {}
         self.dbms            = dbms
         self.direction       = direction
-        self.placeholder     = placeholder
+        self.placeholder     = placeholder if placeholder is not None else DBMS_MAP[dbms]["placeholder"]
         self.fts_language    = fts_language
 
         if not self.dbms or self.dbms not in DBMS_MAP:
@@ -192,7 +194,7 @@ class Datasource:
             raise ValidationError("Expected list as 'columns'.")
 
         quote_char = DBMS_MAP[self.dbms]['quote']
-        delim = DBMS_MAP[self.dbms]['delimiter']
+        delim = ','
 
         parsed_columns = []
         for x in columns:
@@ -236,7 +238,7 @@ class Datasource:
             limit = self._build_limit(
                 dbms=self.dbms, 
                 start=active_limit.get("start", 0), 
-                length=active_limit.get("length", 99)
+                length=active_limit.get("length", DEFAULT_PAGE_LENGTH)
             )
 
         segments = []
@@ -676,13 +678,14 @@ class Datasource:
 
     def _build_limit(self, **kwargs) -> str:
         start = int(kwargs.get("start", 0))
-        length = int(kwargs.get("length", 99))
-        
-        return DBMS_MAP[kwargs["dbms"]].get("limit", "").format(
-                    start,
-                    length,
-                    start + length
-                )
+        length = int(kwargs.get("length", DEFAULT_PAGE_LENGTH))
+
+        limit_template = DBMS_MAP[kwargs["dbms"]].get("limit", "")
+
+        return limit_template.format(
+            start=start,
+            length=length
+        )
 
 def filtersql(payload=None, dbms='Pg', scope=None, raw_source=False, placeholder='?', **kwargs) -> tuple[str, list]:
     payload = payload.copy() if payload else {}
