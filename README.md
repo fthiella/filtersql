@@ -1,5 +1,9 @@
 # filtersql
 
+[![PyPI version](https://badge.fury.io/py/filtersql.svg)](https://badge.fury.io/py/filtersql)
+[![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+
 Frontends, REST APIs and LLMs naturally produce structured JSON - not SQL.
 `filtersql` defines a declarative JSON query language and compiles it
 into safe, parameterized SQL.
