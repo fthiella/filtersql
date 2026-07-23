@@ -188,7 +188,7 @@ class Datasource:
         filters = list(filters or [])
         if not isinstance(filters, list):
             raise ValidationError("Expected list as 'filters'.")
-            
+
         columns = columns or []
         if not isinstance(columns, list):
             raise ValidationError("Expected list as 'columns'.")
@@ -205,7 +205,7 @@ class Datasource:
                 field = x.get('field') or x.get('name')
                 if not field:
                     raise ValidationError(f"Column dict missing 'field' or 'name': {x}")
-                
+
                 if x.get('raw', False):
                     raw_sql = str(field)
                     alias = x.get('alias') or x.get('as')
@@ -356,7 +356,7 @@ class Datasource:
             raise ValidationError("delete() requires at least one id field")
 
         my_filters = [{'field': k, 'operator': '=', 'value': v} for k, v in id.items()]
-        
+
         source = self._resolve_source()
         where_clause, where_values = self.where(filters=my_filters)
 
@@ -390,7 +390,7 @@ class Datasource:
                 formatted_val = str(val)
 
             debug_query = debug_query.replace(self.placeholder, formatted_val, 1)
-            
+
         return debug_query
 
     def where(self, *, filters: list = None, direction: str = None, cursor: dict = None) -> tuple[str, list]:
@@ -398,21 +398,21 @@ class Datasource:
         active_direction = direction or self.direction
         scope_filters = [{'field': k, 'operator': '=', 'value': v} for k, v in self.scope.items()]
         all_filters = scope_filters + list(filters or [])
-        
+
         if all_filters or cursor:
             return self._build_where(filters=all_filters, direction=active_direction, dbms=self.dbms, cursor=cursor)
         return "", []
 
     def _build_where(self, *, filters: list, direction: str, dbms: str, cursor: dict = None) -> tuple[str, list]:
         """Build a WHERE clause from filters. Returns (clause, values)."""
-        
+
         # --- 1. Cursor & Direction Consistency Validation ---
         if cursor is not None and not isinstance(cursor, dict):
             raise ValidationError(f"Invalid cursor format. Expected dict, got: {type(cursor).__name__}")
-            
+
         if cursor and not direction:
             raise ValidationError("A 'direction' ('seek', 'next', 'prev') must be provided when using a 'cursor'.")
-            
+
         if direction and not cursor:
             raise ValidationError(f"A 'cursor' dictionary must be provided when using direction '{direction}'.")
 
@@ -433,7 +433,7 @@ class Datasource:
         if cursor and direction:  # We now mathematically know both exist and are valid
             op = operators[direction]
             cursor_items = list(cursor.items())
-            
+
             if direction == 'seek':
                 conditions = []
                 for k, v in cursor_items:
@@ -559,7 +559,7 @@ class Datasource:
             parts = col.split('->>')
             main_col = self._quote(parts[0].strip(), DBMS_MAP[self.dbms]["quote"])
             key = parts[1].strip()
-            
+
             if value_type == 'numeric':
                 col_expr = f"({main_col}->>'{key}')::numeric"
                 param_expr = f"{self.placeholder}::numeric"
@@ -576,7 +576,7 @@ class Datasource:
         if searchcriteria in ['in', 'notin']:
             if not isinstance(search_value, (list, tuple)):
                 search_value = [search_value] if search_value is not None else []
-            
+
             placeholders_str = ", ".join([param_expr] * len(search_value))
             return raw_statement.format(col=col_expr, params=placeholders_str)
 
@@ -604,22 +604,22 @@ class Datasource:
 
         # 1. Parse JSONB expressions (Pg)
         if '->>' in name or '->' in name:
-            # Dividiamo basandoci sugli operatori '->>' o '->'
-            # (In una regex, (?=...) è un lookahead che mantiene il delimitatore)
+            # Split on JSONB operators '->>'' or '->'
+            # (?=...) lookahead
             parts = re.split(r'(->>|->)', name)
-            
-            # La prima parte è la colonna principale, va quotata normalmente
+
+            # The first part is the main column, quote it normally
             safe_col = self._quote(parts[0].strip(), quote)
-            
-            # Ricostruiamo il resto del path in modo sicuro
+
+            # Rebuild the rest of the path safely
             safe_path = ""
             for i in range(1, len(parts), 2):
                 operator = parts[i]
                 key = parts[i+1].strip().strip("\"'")
-                # Escaping degli apici singoli per la chiave JSON
+                # Escape single quotes in the JSON key
                 safe_key = key.replace("'", "''")
                 safe_path += f"{operator}'{safe_key}'"
-                
+
             return f"{safe_col}{safe_path}"
 
         # 2. Parse dot notation (schema.table)
@@ -662,7 +662,7 @@ class Datasource:
                     raw_source=True,
                     dbms='Pg'
                 )
-                
+
                 # User-provided table name - UNSAFE!
                 ds = Datasource(
                     source=request.GET.get('table'),  # NEVER DO THIS
@@ -687,7 +687,7 @@ class Datasource:
             length=length
         )
 
-def filtersql(payload=None, dbms='Pg', scope=None, raw_source=False, placeholder='?', **kwargs) -> tuple[str, list]:
+def filtersql(payload=None, dbms='Pg', scope=None, raw_source=False, placeholder=None, **kwargs) -> tuple[str, list]:
     payload = payload.copy() if payload else {}
     payload.update(kwargs)
 
@@ -729,7 +729,7 @@ def filtersql(payload=None, dbms='Pg', scope=None, raw_source=False, placeholder
             id=payload.get('id', {}),
             values=payload.get('values', {})
         )
-    
+
     elif action == 'delete':
         return ds.delete(
             id=payload.get('id', {})
