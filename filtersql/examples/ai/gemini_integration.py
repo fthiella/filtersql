@@ -10,6 +10,7 @@ The AI DOES NOT generate SQL; it ONLY generates the payload for filtersql.
 import os
 import json
 from google import genai
+from google.genai import types
 from filtersql import filtersql
 
 from dotenv import load_dotenv
@@ -86,7 +87,7 @@ def question_to_sql(question: str):
     response = client.models.generate_content(
         model='gemini-3.1-flash-lite',
         contents=f"{SYSTEM_INSTRUCTION}\n\nUser Question: {question}",
-        config=genai.types.GenerateContentConfig(
+        config=types.GenerateContentConfig(
             response_mime_type="application/json",
             response_schema=SCHEMA,
             temperature=0.0

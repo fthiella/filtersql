@@ -6,28 +6,37 @@ DBMS_MAP = {
         "placeholder":         '?',
         "quote":               '"',
         "search_map": {
-            '=':               '{col} = {param}',
-            '!=':              '{col} != {param}',
-            '>':               '{col} > {param}',
-            '>=':              '{col} >= {param}',
-            '<':               '{col} < {param}',
-            '<=':              '{col} <= {param}',
-            'starts_with':     '{col} glob {param} || \'*\'',
-            'ends_with':       '{col} glob \'*\' || {param}',
-            'contains':        '{col} glob \'*\' || {param} || \'*\'',
-            'istarts_with':    '{col} like {param} || \'%\'',
-            'iends_with':      '{col} like \'%\' || {param}',
-            'icontains':       '{col} like \'%\' || {param} || \'%\'',
-            'in':              '{col} in ({params})',
-            'notin':           '{col} not in ({params})',
-            'reverse_in':      '{param} in ({cols})',
-            'null':            '{col} is null',
-            'notnull':         '{col} is not null',
-            'between':         '{col} between {param1} and {param2}',
-            'not_starts_with': '{col} not glob {param} || \'*\'',
-            'not_contains':    '{col} not glob \'*\' || {param} || \'*\'',
-            'not_icontains':   '{col} not like \'%\' || {param} || \'%\'',
-            'regexp':          '{col} regexp {param}',
+            '=':                '{col} = {param}',
+            '!=':               '{col} != {param}',
+            '>':                '{col} > {param}',
+            '>=':               '{col} >= {param}',
+            '<':                '{col} < {param}',
+            '<=':               '{col} <= {param}',
+            # case sensitive
+            'starts_with':      '{col} glob {param} || \'*\'',
+            'ends_with':        '{col} glob \'*\' || {param}',
+            'contains':         '{col} glob \'*\' || {param} || \'*\'',
+            'not_starts_with':  '{col} not glob {param} || \'*\'',
+            'not_ends_with':    '{col} not glob \'*\' || {param}',
+            'not_contains':     '{col} not glob \'*\' || {param} || \'*\'',
+            # case insensitive
+            'istarts_with':     '{col} like {param} || \'%\'',
+            'iends_with':       '{col} like \'%\' || {param}',
+            'icontains':        '{col} like \'%\' || {param} || \'%\'',
+            'not_istarts_with': '{col} not like {param} || \'%\'',
+            'not_iends_with':   '{col} not like \'%\' || {param}',
+            'not_icontains':    '{col} not like \'%\' || {param} || \'%\'',
+            # other
+            'in':               '{col} in ({params})',
+            'notin':            '{col} not in ({params})',
+            'reverse_in':       '{param} in ({cols})',
+            'null':             '{col} is null',
+            'notnull':          '{col} is not null',
+            'between':          '{col} between {param1} and {param2}',
+            'regexp':           '{col} regexp {param}',
+            'iregexp':          '{col} regexp {param}',
+            'not_regexp':       '{col} not regexp {param}',
+            'not_iregexp':      '{col} not regexp {param}',
         },
         "limit":  'limit {start}, {length}',
     },
@@ -35,63 +44,119 @@ DBMS_MAP = {
         "placeholder":         '%s',
         "quote":               '"',
         "search_map": {
-            '=':               '{col} = {param}',
-            '!=':              '{col} != {param}',
-            '>':               '{col} > {param}',
-            '>=':              '{col} >= {param}',
-            '<':               '{col} < {param}',
-            '<=':              '{col} <= {param}',
-            'starts_with':     '{col} like {param} || chr(37)',
-            'ends_with':       '{col} like chr(37) || {param}',
-            'contains':        '{col} like chr(37) || {param} || chr(37)',
-            'istarts_with':    '{col} ilike {param} || chr(37)',
-            'iends_with':      '{col} ilike chr(37) || {param}',
-            'icontains':       '{col} ilike chr(37) || {param} || chr(37)',
-            'in':              '{col} in ({params})',
-            'notin':           '{col} not in ({params})',
-            'reverse_in':      '{param} in ({cols})',
-            'null':            '{col} is null',
-            'notnull':         '{col} is not null',
-            'fts':             "{col} @@ websearch_to_tsquery('{lang}', {param})",
-            'fts_query':       "to_tsvector('{lang}', coalesce({col}, '')) @@ websearch_to_tsquery('{lang}', {param})",
-            'between':         '{col} between {param1} and {param2}',
-            'not_starts_with': '{col} not like {param} || chr(37)',
-            'not_contains':    '{col} not like chr(37) || {param} || chr(37)',
-            'not_icontains':   '{col} not ilike chr(37) || {param} || chr(37)',
-            'regexp':          '{col} ~ {param}',
-            'iregexp':         '{col} ~* {param}',
+            '=':                '{col} = {param}',
+            '!=':               '{col} != {param}',
+            '>':                '{col} > {param}',
+            '>=':               '{col} >= {param}',
+            '<':                '{col} < {param}',
+            '<=':               '{col} <= {param}',
+            # case sensitive
+            'starts_with':      '{col} like {param} || chr(37)',
+            'ends_with':        '{col} like chr(37) || {param}',
+            'contains':         '{col} like chr(37) || {param} || chr(37)',
+            'not_starts_with':  '{col} not like {param} || chr(37)',
+            'not_ends_with':    '{col} not like chr(37) || {param}',
+            'not_contains':     '{col} not like chr(37) || {param} || chr(37)',
+            # case insensitive
+            'istarts_with':     '{col} ilike {param} || chr(37)',
+            'iends_with':       '{col} ilike chr(37) || {param}',
+            'icontains':        '{col} ilike chr(37) || {param} || chr(37)',
+            'not_istarts_with': '{col} not ilike {param} || chr(37)',
+            'not_iends_with':   '{col} not ilike chr(37) || {param}',
+            'not_icontains':    '{col} not ilike chr(37) || {param} || chr(37)',
+            # vectors
+            'fts':              "{col} @@ websearch_to_tsquery('{lang}', {param})",
+            'fts_query':        "to_tsvector('{lang}', coalesce({col}, '')) @@ websearch_to_tsquery('{lang}', {param})",
+            # other
+            'in':               '{col} in ({params})',
+            'notin':            '{col} not in ({params})',
+            'reverse_in':       '{param} in ({cols})',
+            'null':             '{col} is null',
+            'notnull':          '{col} is not null',
+            'between':          '{col} between {param1} and {param2}',
+            'regexp':           '{col} ~ {param}',
+            'iregexp':          '{col} ~* {param}',
+            'not_regexp':       '{col} !~ {param}',
+            'not_iregexp':      '{col} !~* {param}'
+        },
+        "limit": 'limit {length} offset {start}',
+    },
+    'DuckDB': {
+        "placeholder":         '?',
+        "quote":               '"',
+        "search_map": {
+            '=':                '{col} = {param}',
+            '!=':               '{col} != {param}',
+            '>':                '{col} > {param}',
+            '>=':               '{col} >= {param}',
+            '<':                '{col} < {param}',
+            '<=':               '{col} <= {param}',
+            # case sensitive
+            'starts_with':      '{col} like {param} || chr(37)',
+            'ends_with':        '{col} like chr(37) || {param}',
+            'contains':         '{col} like chr(37) || {param} || chr(37)',
+            'not_starts_with':  '{col} not like {param} || chr(37)',
+            'not_ends_with':    '{col} not like chr(37) || {param}',
+            'not_contains':     '{col} not like chr(37) || {param} || chr(37)',
+            # case insensitive
+            'istarts_with':     '{col} ilike {param} || chr(37)',
+            'iends_with':       '{col} ilike chr(37) || {param}',
+            'icontains':        '{col} ilike chr(37) || {param} || chr(37)',
+            'not_istarts_with': '{col} not ilike {param} || chr(37)',
+            'not_iends_with':   '{col} not ilike chr(37) || {param}',
+            'not_icontains':    '{col} not ilike chr(37) || {param} || chr(37)',
+            # other
+            'in':               '{col} in ({params})',
+            'notin':            '{col} not in ({params})',
+            'reverse_in':       '{param} in ({cols})',
+            'null':             '{col} is null',
+            'notnull':          '{col} is not null',
+            'between':          '{col} between {param1} and {param2}',
+            'regexp':           '{col} ~ {param}',
+            'iregexp':          '{col} ~* {param}',
+            'not_regexp':       '{col} !~ {param}',
+            'not_iregexp':      '{col} !~* {param}'
         },
         "limit": 'limit {length} offset {start}',
     },
     'mysql': {
-        "placeholder":         '?',
+        "placeholder":         '%s',
         "quote":               '`',
         "search_map": {
-            '=':               '{col} = {param}',
-            '!=':              '{col} != {param}',
-            '>':               '{col} > {param}',
-            '>=':              '{col} >= {param}',
-            '<':               '{col} < {param}',
-            '<=':              '{col} <= {param}',
-            'starts_with':     '{col} like binary concat({param}, \'%\')',
-            'ends_with':       '{col} like binary concat(\'%\', {param})',
-            'contains':        '{col} like binary concat(\'%\', {param}, \'%\')',
-            'istarts_with':    '{col} like concat({param}, \'%\')',
-            'iends_with':      '{col} like concat(\'%\', {param})',
-            'icontains':       '{col} like concat(\'%\', {param}, \'%\')',
-            'in':              '{col} in ({params})',
-            'notin':           '{col} not in ({params})',
-            'reverse_in':      '{param} in ({cols})',
-            'null':            '{col} is null',
-            'notnull':         '{col} is not null',
+            '=':                '{col} = {param}',
+            '!=':               '{col} != {param}',
+            '>':                '{col} > {param}',
+            '>=':               '{col} >= {param}',
+            '<':                '{col} < {param}',
+            '<=':               '{col} <= {param}',
+            # case sensitive (LIKE BINARY)
+            'starts_with':      '{col} like binary concat({param}, \'%\')',
+            'ends_with':        '{col} like binary concat(\'%\', {param})',
+            'contains':         '{col} like binary concat(\'%\', {param}, \'%\')',
+            'not_starts_with':  '{col} not like binary concat({param}, \'%\')',
+            'not_ends_with':    '{col} not like binary concat(\'%\', {param})',
+            'not_contains':     '{col} not like binary concat(\'%\', {param}, \'%\')',
+            # case insensitive (standard LIKE)
+            'istarts_with':     '{col} like concat({param}, \'%\')',
+            'iends_with':       '{col} like concat(\'%\', {param})',
+            'icontains':        '{col} like concat(\'%\', {param}, \'%\')',
+            'not_istarts_with': '{col} not like concat({param}, \'%\')',
+            'not_iends_with':   '{col} not like concat(\'%\', {param})',
+            'not_icontains':    '{col} not like concat(\'%\', {param}, \'%\')',
+            # full text search
             'fts':              "match({col}) against({param} in boolean mode)",
             'fts_query':        "match({col}) against({param} in boolean mode)",
-            'between':         '{col} between {param1} and {param2}',
-            'not_starts_with': '{col} not like binary concat({param}, \'%\')',
-            'not_contains':    '{col} not like binary concat(\'%\', {param}, \'%\')',
-            'not_icontains':   '{col} not like concat(\'%\', {param}, \'%\')',
-            'regexp':          '{col} regexp {param}',
-            'iregexp':         '{col} regexp {param}',
+            # other
+            'in':               '{col} in ({params})',
+            'notin':            '{col} not in ({params})',
+            'reverse_in':       '{param} in ({cols})',
+            'null':             '{col} is null',
+            'notnull':          '{col} is not null',
+            'between':          '{col} between {param1} and {param2}',
+            'regexp':           '{col} regexp binary {param}',
+            'iregexp':          '{col} regexp {param}',
+            'not_regexp':       '{col} not regexp binary {param}',
+            'not_iregexp':      '{col} not regexp {param}',
         },
         "limit": 'limit {start}, {length}',
     },
@@ -99,29 +164,37 @@ DBMS_MAP = {
         "placeholder":         '?',
         "quote":               '"',
         "search_map": {
-            '=':               '{col} = {param}',
-            '!=':              '{col} != {param}',
-            '>':               '{col} > {param}',
-            '>=':              '{col} >= {param}',
-            '<':               '{col} < {param}',
-            '<=':              '{col} <= {param}',
-            'starts_with':     '{col} like {param} || \'%\'',
-            'ends_with':       '{col} like \'%\' || {param}',
-            'contains':        '{col} like \'%\' || {param} || \'%\'',
-            'istarts_with':    'regexp_like({col}, \'^\' || {param}, \'i\')',
-            'iends_with':      'regexp_like({col}, {param} || \'$\', \'i\')',
-            'icontains':       'regexp_like({col}, {param}, \'i\')',
-            'in':              '{col} in ({params})',
-            'notin':           '{col} not in ({params})',
-            'reverse_in':      '{param} in ({cols})',
-            'null':            '{col} is null',
-            'notnull':         '{col} is not null',
-            'between':         '{col} between {param1} and {param2}',
-            'not_starts_with': '{col} not like {param} || \'%\'',
-            'not_contains':    '{col} not like \'%\' || {param} || \'%\'',
-            'not_icontains':   'not regexp_like({col}, {param}, \'i\')',
-            'regexp':          'regexp_like({col}, {param})',
-            'iregexp':         'regexp_like({col}, {param}, \'i\')',
+            '=':                '{col} = {param}',
+            '!=':               '{col} != {param}',
+            '>':                '{col} > {param}',
+            '>=':               '{col} >= {param}',
+            '<':                '{col} < {param}',
+            '<=':               '{col} <= {param}',
+            # case sensitive
+            'starts_with':      '{col} like {param} || \'%\'',
+            'ends_with':        '{col} like \'%\' || {param}',
+            'contains':         '{col} like \'%\' || {param} || \'%\'',
+            'not_starts_with':  '{col} not like {param} || \'%\'',
+            'not_ends_with':    '{col} not like \'%\' || {param}',
+            'not_contains':     '{col} not like \'%\' || {param} || \'%\'',
+            # case insensitive - upper()
+            'istarts_with':     'upper({col}) like upper({param}) || \'%\'',
+            'iends_with':       'upper({col}) like \'%\' || upper({param})',
+            'icontains':        'upper({col}) like \'%\' || upper({param}) || \'%\'',
+            'not_istarts_with': 'upper({col}) not like upper({param}) || \'%\'',
+            'not_iends_with':   'upper({col}) not like \'%\' || upper({param})',
+            'not_icontains':    'upper({col}) not like \'%\' || upper({param}) || \'%\'',
+            # other
+            'in':               '{col} in ({params})',
+            'notin':            '{col} not in ({params})',
+            'reverse_in':       '{param} in ({cols})',
+            'null':             '{col} is null',
+            'notnull':          '{col} is not null',
+            'between':          '{col} between {param1} and {param2}',
+            'regexp':           'regexp_like({col}, {param})',
+            'iregexp':          'regexp_like({col}, {param}, \'i\')',
+            'not_regexp':       'not regexp_like({col}, {param})',
+            'not_iregexp':      'not regexp_like({col}, {param}, \'i\')',
         },
         "limit": 'offset {start} rows fetch next {length} rows only'
     }
@@ -161,30 +234,44 @@ class Datasource:
         limit: dict = None,
         scope: dict = None,
         direction: str = None,
-        placeholder: str = '?',
+        placeholder: str = None,
         fts_language: str = 'english'
     ):
         """
         Datasource initialization
         """
-
-        self.source          = source
-        self.raw_source      = raw_source
-        self.order           = order or []
-        self.limit           = limit
-        self.scope           = scope or {}
         self.dbms            = dbms
-        self.direction       = direction
-        self.placeholder     = placeholder if placeholder is not None else DBMS_MAP[dbms]["placeholder"]
-        self.fts_language    = fts_language
 
         if not self.dbms or self.dbms not in DBMS_MAP:
             raise ConfigurationError(
                 f"Unknown or missing dbms: '{self.dbms}'. Valid: {list(DBMS_MAP.keys())}"
             )
 
-    def select(self, *, columns: list = None, filters: list = None, order: list = None, limit: dict = None, direction: str = None, cursor: dict = None) -> tuple[str, list]:
-        """Build a SELECT query. Pass columns, filters, order, limit explicitly."""
+        self.source          = source
+        self.raw_source      = raw_source
+        self.order           = order or []
+        self.limit           = limit
+        self.scope           = scope or {}
+        self.direction       = direction
+        self.fts_language    = fts_language
+
+        self.placeholder     = placeholder if placeholder is not None else DBMS_MAP[dbms]["placeholder"]
+
+    def select(
+        self,
+        *,
+        columns: list = None,
+        filters: list = None,
+        group_by: list = None,
+        having: list = None,
+        order: list = None,
+        limit: dict = None,
+        direction: str = None,
+        cursor: dict = None
+    ) -> tuple[str, list]:
+        """
+        Build a SELECT query. Pass columns, filters, order, limit explicitly.
+        """
         filters = list(filters or [])
         if not isinstance(filters, list):
             raise ValidationError("Expected list as 'filters'.")
@@ -192,6 +279,12 @@ class Datasource:
         columns = columns or []
         if not isinstance(columns, list):
             raise ValidationError("Expected list as 'columns'.")
+
+        if group_by is not None and not isinstance(group_by, list):
+            raise ValidationError("Expected list as 'group_by'")
+
+        if having is not None and not isinstance(having, list):
+            raise ValidationError("Expected list as 'having'")
 
         quote_char = DBMS_MAP[self.dbms]['quote']
         delim = ','
@@ -223,6 +316,13 @@ class Datasource:
 
         active_direction = direction or self.direction
         where_clause, where_values = self.where(filters=filters, direction=active_direction, cursor=cursor)
+
+        having_clause = ""
+        having_values = []
+        if having:
+            having_clause, having_values = self.having(filters=having)
+        
+        values = where_values + having_values
 
         active_order = order if order is not None else self.order
         parsed_order = [
@@ -259,6 +359,18 @@ class Datasource:
                 f"  {where_clause}"
             ])
 
+        if group_by:
+            segments.extend([
+                "group by",
+                f"  " + ", ".join(self._quote(col, quote_char) for col in group_by)
+            ])
+
+        if having_clause:
+            segments.extend([
+                "having",
+                f"  {having_clause}"
+            ])
+
         if parsed_order:
             segments.extend([
                 "order by",
@@ -268,7 +380,7 @@ class Datasource:
         if limit:
             segments.append(limit)
 
-        return "\n".join(segments) + "\n", where_values
+        return "\n".join(segments) + "\n", values
 
     def insert(self, *, values: dict = None, returning: str = None) -> tuple[str, list]:
         """Build an INSERT statement. Requires values dict, optional returning field."""
@@ -402,6 +514,14 @@ class Datasource:
         if all_filters or cursor:
             return self._build_where(filters=all_filters, direction=active_direction, dbms=self.dbms, cursor=cursor)
         return "", []
+
+    def having(self, *, filters: list = None) -> tuple[str, list]:
+        """
+        Build HAVING clause. Same logic as WHERE but for GROUP BY.
+        """
+        if not filters:
+            return "", []
+        return self._build_filter_group(filters, join='and')
 
     def _build_where(self, *, filters: list, direction: str, dbms: str, cursor: dict = None) -> tuple[str, list]:
         """Build a WHERE clause from filters. Returns (clause, values)."""
@@ -714,6 +834,8 @@ def filtersql(payload=None, dbms='Pg', scope=None, raw_source=False, placeholder
         return ds.select(
             columns=payload.get('columns'),
             filters=payload.get('filters'),
+            group_by=payload.get('group_by'),
+            having=payload.get('having'),
             cursor=payload.get('cursor'),
             direction=payload.get('direction'),
         )

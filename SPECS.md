@@ -1,6 +1,6 @@
-# filtersql JSON Payload Specification (v1.0)
+# filtersql JSON Payload Specification (v1.1)
 
-**Version**: 1.0 (Draft)
+**Version**: 1.1 (Draft)
 
 This document defines the formal, language-agnostic JSON payload specification for **filtersql**. Any implementation of this protocol (whether written in Python, Node.js, Go, Rust, or any other language) must accept and validate payloads conforming to this standard.
 
@@ -19,6 +19,8 @@ Every request payload must be a JSON object containing the top-level keys `actio
 |   ├── source (string: table, view, or raw subquery)         |
 |   ├── columns (array of strings or structured objects)      |
 |   ├── filters (array of standard or logically nested dicts) |
+|   ├── group_by (array of strings)                           |
+|   ├── having (array of standard or logically nested dicts)  |
 |   ├── order (array of column-ordering definitions)          |
 |   ├── limit (object: start, length)                         |
 |   └── cursor (object: multi-column context metrics)         |
@@ -33,6 +35,8 @@ Every request payload must be a JSON object containing the top-level keys `actio
 | `source` | `string` | **Yes** | The destination identifier (e.g., table name, database view, or subquery expression). |
 | `columns` | `array` | No | Defines the projection properties. Used exclusively by `"select"`. |
 | `filters` | `array` | No | A flat or nested set of conditions mapping directly to a SQL `WHERE` clause. |
+| `group_by` | `array of strings` | No | List of columns for `GROUP BY` |
+| `having`   | `array of filters` | No | Same format as `filters`, applied as `HAVING` |
 | `order` | `array` | No | A list defining the sorting hierarchy. |
 | `limit` | `object` | No | Window configuration defining offset boundaries (`start` and `length`). |
 | `cursor` | `object` | No | Coordinates containing field-value boundaries for keyset pagination. |
@@ -70,18 +74,23 @@ The `filters` array serves as the collection point for constraints. By default, 
 * `value_type` (`string`, Optional): Instructs explicit datatype casting on evaluation (e.g., `"numeric"`, `"date"`), predominantly utilized in JSONB extraction operations.
 
 #### Supported Filter Operators:
+
 | Operator | Description | Value Type | Expected SQL Match |
 | :--- | :--- | :--- | :--- |
 | `=`, `!=` | Equality checks | Primitive | `=` or `!=` |
 | `>`, `>=`, `<`, `<=` | Range evaluations | Primitive | Comparisons (`>`, `<=`, etc.) |
 | `between` | Boundary check | Array `[min, max]` | `BETWEEN ? AND ?` |
 | `in`, `notin` | Enumerated list membership | Array of primitives | `IN (?, ?, ...)` |
-| `contains`, `icontains` | Substring match (Exact / Case-Insensitive) | `string` | `LIKE` / `ILIKE` with matching wildcards |
-| `starts_with`, `istarts_with` | Prefix match (Exact / Case-Insensitive) | `string` | String pre\fix matching |
-| `ends_with`, `iends_with` | Suffix match (Exact / Case-Insensitive) | `string` | String suffix matching |
+| `contains`, `not_contains` | Substring match / exclusion (Case-Sensitive) | `string` | `LIKE` (or `GLOB`) with wildcards |
+| `starts_with`, `not_starts_with`| Prefix match / exclusion (Case-Sensitive) | `string` | String prefix matching |
+| `ends_with`, `not_ends_with` | Suffix match / exclusion (Case-Sensitive) | `string` | String suffix matching |
+| `icontains`, `not_icontains` | Substring match / exclusion (Case-Insensitive) | `string` | `ILIKE` with wildcards |
+| `istarts_with`, `not_istarts_with`| Prefix match / exclusion (Case-Insensitive)| `string` | String prefix matching |
+| `iends_with`, `not_iends_with` | Suffix match / exclusion (Case-Insensitive) | `string` | String suffix matching |
 | `null`, `notnull` | Emptiness evaluations | Omitted | `IS NULL` / `IS NOT NULL` |
 | `reverse_in` | Constant scanning across columns | `string` (comma-sep columns)| `? IN (col1, col2)` |
-| `regexp`, `iregexp` | Regular expression evaluation | `string` | Native Regex tokens (`~`, `~*`, `regexp_like`) |
+| `regexp`, `not_regexp` | Regular expression / exclusion (Case-Sensitive) | `string` | Native Regex tokens (`~`, `!~`, `regexp_like`) |
+| `iregexp`, `not_iregexp` | Regular expression / exclusion (Case-Insensitive) | `string` | Native Regex tokens (`~*`, `!~*`, etc.) |
 | `fts`, `fts_query` | Full-Text Search processing | `string` | `@@ websearch_to_tsquery` or `MATCH AGAINST` |
 
 #### Nested Logical Groups (`or` / `and`):
@@ -140,6 +149,26 @@ To execute high-efficiency pagination over substantial dataset windows without r
 "direction": "next"
 ```
 
+### 2.5 Group By and Having
+
+`group_by` accepts a list of column names (plain strings).
+`having` uses the exact same filter format as `filters`.
+
+```json
+{
+  "action": "select",
+  "source": "users",
+  "columns": [
+    {"field": "status"},
+    {"field": "COUNT(*)", "raw": true, "alias": "total"}
+  ],
+  "group_by": ["status"],
+  "having": [
+    {"field": "total", "operator": ">", "value": 5}
+  ]
+}
+```
+
 ---
 
 ## 3. JSON Schema Specification (Draft 7)
@@ -179,6 +208,14 @@ To execute high-efficiency pagination over substantial dataset windows without r
       }
     },
     "filters": {
+      "type": "array",
+      "items": { "$ref": "#/definitions/filterElement" }
+    },
+    "group_by": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "having": {
       "type": "array",
       "items": { "$ref": "#/definitions/filterElement" }
     },

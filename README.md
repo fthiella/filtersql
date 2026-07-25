@@ -4,8 +4,10 @@
 [![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
+**A lightweight Python library that translates structured JSON into safe, parameterized SQL.**
+
 Frontends, REST APIs and LLMs naturally produce structured JSON - not SQL.
-`filtersql` defines a declarative JSON query language and compiles it
+`filtersql` is a Python package that defines a declarative JSON query language and compiles it
 into safe, parameterized SQL.
 
 ```
@@ -14,7 +16,7 @@ JSON payload (or Python dicts) → filtersql → SQL string + values list
 
 It is intentionally not an ORM or a connection manager. It builds the query and returns it.
 Query execution remains the responsibility of the caller, making filtersql compatible
-with any Python DB driver.
+with any Python DB driver (psycopg2, sqlite3, asyncpg, etc.).
 
 Designed for three use cases:
 
@@ -22,12 +24,13 @@ Designed for three use cases:
 - **Cursor-based pagination** (Access-style, no OFFSET)
 - **Deterministic LLM pipelines** - the LLM generates JSON, filtersql compiles it to safe SQL
 
-Supports PostgreSQL, SQLite, MySQL, and Oracle.
+Supports PostgreSQL, SQLite, MySQL, DuckDB and Oracle.
 
 ## Features
 
+- **Python-native & Lightweight** - No ORM required. Works seamlessly with your favorite Python database driver
 - **Secure by default** - Fully parameterized queries, protected against SQL injection
-- **Multi-database support** - PostgreSQL, SQLite, MySQL, and Oracle
+- **Multi-database support** - PostgreSQL, SQLite, MySQL, DuckDB and Oracle
 - **Lightweight** - No ORM required. Works with any database driver (psycopg2, sqlite3, mysql-connector, cx_Oracle, etc.)
 - **Language-agnostic** - Clean JSON protocol, perfect for REST APIs and frontend applications
 - **High-performance pagination** - Keyset (cursor-based) pagination, avoiding slow `OFFSET` queries
@@ -320,6 +323,23 @@ query = f"""
 """
 ```
 
+## Group By and Having
+
+`filtersql` now supports `GROUP BY` and `HAVING` for aggregations and analytics.
+
+```python
+query, values = ds.select(
+    columns=[
+        {'field': 'status'},
+        {'field': 'COUNT(*)', 'raw': True, 'alias': 'total'}
+    ],
+    filters=[{'field': 'age', 'operator': '>=', 'value': 18}],
+    group_by=['status'],
+    having=[{'field': 'total', 'operator': '>', 'value': 5}],   # usa l'alias
+    order=[{'field': 'total', 'order': 'desc'}]
+)
+```
+
 ---
 
 ## filtersql() - convenience function
@@ -434,8 +454,15 @@ from pydantic import BaseModel, Field
 from typing import List, Literal
 
 class SQLFilter(BaseModel):
-    field: Literal['doc_type', 'doc_date', 'author', 'title']
-    operator: Literal['=', '!=', '>', '>=', '<', '<=', 'icontains', 'between', 'in', 'notin']
+    field: str
+    operator: Literal[
+        '=', '!=', '>', '>=', '<', '<=', 
+        'contains', 'not_contains', 'icontains', 'not_icontains',
+        'starts_with', 'not_starts_with', 'istarts_with', 'not_istarts_with',
+        'ends_with', 'not_ends_with', 'iends_with', 'not_iends_with',
+        'between', 'in', 'notin', 'regexp', 'iregexp', 'not_regexp', 'not_iregexp',
+        'null', 'notnull', 'fts', 'fts_query', 'reverse_in'
+    ]
     value: str
 
 class QuerySchema(BaseModel):
@@ -543,22 +570,19 @@ ds = filtersql.Datasource(..., fts_language='italian')
 
 | Operator | Description |
 |---|---|
-| `=` `!=` `>` `>=` `<` `<=` | Comparison |
+| `=`, `!=`, `>`, `>=`, `<`, `<=` | Comparison |
 | `between` | Range - value must be `[low, high]` |
-| `contains` | Case-sensitive substring |
-| `starts_with` | Case-sensitive prefix |
-| `ends_with` | Case-sensitive suffix |
-| `not_contains` | Case-sensitive substring exclusion |
-| `not_starts_with` | Case-sensitive prefix exclusion |
-| `icontains` | Case-insensitive substring |
-| `istarts_with` | Case-insensitive prefix |
-| `iends_with` | Case-insensitive suffix |
-| `not_icontains` | Case-insensitive substring exclusion |
+| `contains` / `not_contains` | Case-sensitive substring / exclusion |
+| `starts_with` / `not_starts_with` | Case-sensitive prefix / exclusion |
+| `ends_with` / `not_ends_with` | Case-sensitive suffix / exclusion |
+| `icontains` / `not_icontains` | Case-insensitive substring / exclusion |
+| `istarts_with` / `not_istarts_with` | Case-insensitive prefix / exclusion |
+| `iends_with` / `not_iends_with` | Case-insensitive suffix / exclusion |
 | `null` / `notnull` | NULL checks - no value needed |
 | `in` / `notin` | List membership |
 | `reverse_in` | Value in a set of columns - `? IN (col1, col2)` |
-| `regexp` | Case-sensitive regular expression |
-| `iregexp` | Case-insensitive regexp (Pg: `~*`, Oracle: `regexp_like` with `i`) |
+| `regexp` / `not_regexp` | Case-sensitive regular expression / exclusion |
+| `iregexp` / `not_iregexp`| Case-insensitive regexp / exclusion |
 | `fts` | Full-text search on indexed column (Pg, MySQL) |
 | `fts_query` | Full-text search on text column (Pg only) |
 
@@ -570,7 +594,8 @@ ds = filtersql.Datasource(..., fts_language='italian')
 |---|---|---|
 | PostgreSQL | `'Pg'` | `%s` |
 | SQLite | `'SQLite'` | `?` |
-| MySQL | `'mysql'` | `?` |
+| DuckDB | `'DuckDB'` | `?` |
+| MySQL | `'mysql'` | `%s` |
 | Oracle | `'Oracle'` | `?` |
 
 Override with any placeholder your driver expects:
@@ -589,6 +614,7 @@ Working examples are in the `/examples` folder:
 - `examples/datatables/` - Flask + DataTables server-side with column filters and global search
 - `examples/pagination/` - REST API gateway with security whitelist for insert/update/delete
 - `examples/ai/` - Gemini structured output → filtersql → SQLite
+- `examples/pandas_duckdb/` - Query Pandas DataFrames using DuckDB + filtersql
 
 ---
 

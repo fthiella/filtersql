@@ -167,6 +167,24 @@ class TestFilterOperators(unittest.TestCase):
         self.assertIn('ilike', q)
         self.assertEqual(v, ['oh'])
 
+    def test_not_ends_with(self):
+        q, v = self._where('not_ends_with', 'son')
+        self.assertIn('not', q)
+        self.assertIn('like', q)
+        self.assertEqual(v, ['son'])
+
+    def test_not_istarts_with(self):
+        q, v = self._where('not_istarts_with', 'Jo')
+        self.assertIn('not', q)
+        self.assertIn('ilike', q)
+        self.assertEqual(v, ['Jo'])
+
+    def test_not_iends_with(self):
+        q, v = self._where('not_iends_with', 'son')
+        self.assertIn('not', q)
+        self.assertIn('ilike', q)
+        self.assertEqual(v, ['son'])
+
     # NULL checks
     def test_null(self):
         q, v = self._where('null', None)
@@ -230,6 +248,16 @@ class TestFilterOperators(unittest.TestCase):
     def test_iregexp(self):
         q, v = self._where('iregexp', '^john')
         self.assertIn('~*', q)
+        self.assertEqual(v, ['^john'])
+
+    def test_not_regexp(self):
+        q, v = self._where('not_regexp', '^john')
+        self.assertIn('!~', q)
+        self.assertEqual(v, ['^john'])
+
+    def test_not_iregexp(self):
+        q, v = self._where('not_iregexp', '^john')
+        self.assertIn('!~*', q)
         self.assertEqual(v, ['^john'])
 
     # reverse_in
@@ -754,7 +782,7 @@ class TestQuoteInSQL(unittest.TestCase):
             columns=[{'field': 'id'}],
             filters=[{'field': 'first_name', 'operator': '=', 'value': 'John'}]
         )
-        self.assertIn('`first_name` = ?', q)
+        self.assertIn('`first_name` = %s', q)
 
     def test_source_quoted_correctly(self):
         ds = make_ds(source='my_table')
@@ -968,6 +996,21 @@ class TestMultiDBMS(unittest.TestCase):
     def test_fts_raises_on_oracle(self):
         with self.assertRaises(ValidationError):
             self._select('Oracle', [{'field': 'tsv', 'operator': 'fts', 'value': 'test'}])
+
+    def test_duckdb_basic_placeholder(self):
+        q, _ = self._select('DuckDB', [{'field': 'name', 'operator': '=', 'value': 'jo'}])
+        self.assertIn('?', q)
+        self.assertNotIn('%s', q)
+
+    def test_duckdb_iregexp_uses_tilde_asterisk(self):
+        q, _ = self._select('DuckDB', [{'field': 'name', 'operator': 'iregexp', 'value': '^jo'}])
+        self.assertIn('~*', q)
+        self.assertIn('?', q)
+        
+    def test_duckdb_limit_offset(self):
+        ds = sql.Datasource(source='t', dbms='DuckDB')
+        q, _ = ds.select(columns=[{'field': 'id'}], limit={'start': 10, 'length': 5})
+        self.assertIn('limit 5 offset 10', q)
 
 
 # ---------------------------------------------------------------------------
@@ -1339,7 +1382,7 @@ class TestMySQLFts(unittest.TestCase):
             filters=[{'field': 'content', 'operator': 'fts', 'value': 'search terms'}]
         )
         self.assertIn('match(`content`)', q)
-        self.assertIn('against(? in boolean mode)', q)
+        self.assertIn('against(%s in boolean mode)', q)
         self.assertEqual(v, ['search terms'])
 
     def test_mysql_fts_query(self):
@@ -1349,7 +1392,7 @@ class TestMySQLFts(unittest.TestCase):
             filters=[{'field': 'content', 'operator': 'fts_query', 'value': 'search'}]
         )
         self.assertIn('match(`content`)', q)
-        self.assertIn('against(? in boolean mode)', q)
+        self.assertIn('against(%s in boolean mode)', q)
         self.assertEqual(v, ['search'])
 
     def test_mysql_fts_combined_with_other_filters(self):
@@ -1361,7 +1404,7 @@ class TestMySQLFts(unittest.TestCase):
                 {'field': 'content', 'operator': 'fts', 'value': 'mysql search'}
             ]
         )
-        self.assertIn('`status` = ?', q)
+        self.assertIn('`status` = %s', q)
         self.assertIn('match(`content`)', q)
         self.assertEqual(v, ['published', 'mysql search'])
 
@@ -1448,7 +1491,7 @@ class TestCursorViaFiltersqlFunction(unittest.TestCase):
             order=[{'field': 'id', 'order': 'asc'}],
             dbms='Pg'
         )
-        self.assertIn('"id" > ?', q)
+        self.assertIn('"id" > %s', q)
         self.assertEqual(v, [100])
 
     def test_cursor_with_payload_and_kwargs(self):
@@ -1463,7 +1506,7 @@ class TestCursorViaFiltersqlFunction(unittest.TestCase):
             direction='next',
             dbms='Pg'
         )
-        self.assertIn('"id" > ?', q)
+        self.assertIn('"id" > %s', q)
         self.assertEqual(v, [100])
 
 class TestColumnFeatures(unittest.TestCase):
@@ -1502,6 +1545,56 @@ class TestColumnFeatures(unittest.TestCase):
         self.assertIn('"id"', q)
         self.assertIn('"name" as "full_name"', q)
         self.assertIn('COUNT(*) as "total"', q)
+
+class TestGroupByHaving(unittest.TestCase):
+    def test_group_by(self):
+        ds = make_ds()
+        q, v = ds.select(
+            columns=[
+                {'field': 'status', 'alias': 'status_group'},
+                {'field': 'COUNT(*)', 'raw': True, 'alias': 'count'}
+            ],
+            group_by=['status'],
+            order=[{'field': 'count', 'order': 'desc'}]
+        )
+        self.assertIn('group by', q.lower())
+        self.assertIn('"status"', q)
+
+    def test_having(self):
+        ds = make_ds()
+        q, v = ds.select(
+            columns=[
+                {'field': 'status', 'alias': 'status_group'},
+                {'field': 'COUNT(*)', 'raw': True, 'alias': 'count'}
+            ],
+            group_by=['status'],
+            having=[{'field': 'count', 'operator': '>', 'value': 5}]
+        )
+        self.assertIn('having', q.lower())
+        self.assertIn('"count" > %s', q)
+
+    def test_full_aggregation_pipeline(self):
+        """Tests WHERE, GROUP BY, HAVING, and ORDER BY all combined."""
+        ds = make_ds()
+        q, v = ds.select(
+            columns=[
+                {'field': 'department', 'alias': 'dept'},
+                {'field': 'SUM(salary)', 'raw': True, 'alias': 'total_salary'}
+            ],
+            filters=[{'field': 'is_active', 'operator': '=', 'value': True}],
+            group_by=['department'],
+            having=[{'field': 'total_salary', 'operator': '>', 'value': 100000}],
+            order=[{'field': 'total_salary', 'order': 'desc'}]
+        )
+        
+        # Verify the strict SQL clause order
+        where_idx = q.find('where')
+        group_idx = q.find('group by')
+        having_idx = q.find('having')
+        order_idx = q.find('order by')
+        
+        self.assertTrue(where_idx < group_idx < having_idx < order_idx)
+        self.assertEqual(v, [True, 100000])
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)

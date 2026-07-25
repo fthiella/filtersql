@@ -36,8 +36,7 @@ def api_gateway(source, action):
         # syntax (GLOB) and positional parameter binding (?)
         query, params = filtersql(
             {**payload, 'action': action, 'source': source},
-            dbms='SQLite',
-            placeholder='?'
+            dbms='SQLite'
         )
 
         # 4. Database Execution
