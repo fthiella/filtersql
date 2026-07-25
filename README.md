@@ -1,6 +1,6 @@
 # filtersql
 
-[![PyPI version](https://badge.fury.io/py/filtersql.svg)](https://badge.fury.io/py/filtersql)
+[![PyPI version](https://img.shields.io/pypi/v/filtersql)](https://pypi.org/project/filtersql/)
 [![Python 3.7+](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
