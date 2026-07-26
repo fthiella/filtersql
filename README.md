@@ -59,6 +59,7 @@ From JSON:
 {
   "action": "select",
   "source": "users",
+  "dbms":   "SQLite",
   "filters": [
     {
       "field": "name",
@@ -129,7 +130,7 @@ print(query)
 # from
 #   "users"
 # where
-#   ("first_name" ilike '%' || %s || '%' and "last_name" ilike '%' || %s || '%')
+#   ("first_name" ilike chr(37) || %s || chr(37) escape '\' and "last_name" ilike chr(37) || %s || chr(37) escape '\')
 # order by
 #   "first_name" asc
 # limit 10 offset 0
@@ -140,6 +141,8 @@ print(values)
 cursor.execute(query, values)
 rows = cursor.fetchall()
 ```
+_Note_: PostgreSQL uses `chr(37)` instead of `'%'` for compatibility, and `escape '\'` is
+added automatically to handle wildcard characters in search values.
 
 ---
 
@@ -331,11 +334,11 @@ query = f"""
 query, values = ds.select(
     columns=[
         {'field': 'status'},
-        {'field': 'COUNT(*)', 'raw': True, 'alias': 'total'}
+        {'field': 'count(*)', 'raw': True, 'alias': 'total'}
     ],
     filters=[{'field': 'age', 'operator': '>=', 'value': 18}],
     group_by=['status'],
-    having=[{'field': 'total', 'operator': '>', 'value': 5}],   # usa l'alias
+    having=[{'field': 'count(*)', 'raw': True, 'operator': '>', 'value': 5}],
     order=[{'field': 'total', 'order': 'desc'}]
 )
 ```
@@ -382,6 +385,17 @@ print(ds.debug(query, values))
 # where
 #   ("first_name" ilike '%' || 'John' || '%')
 ```
+
+---
+
+## Wildcard Escape in Pattern Matching
+
+Operators like `contains`, `icontains`, `starts_with`, etc. use `like` or `glob` patterns.
+
+`filtersql` automatically escapes wildcard characters (`%`, `_`, `*`, `?`, `[`) in the
+search value, so searching for `"100%"` finds the literal string `"100%"`, not `"100"` + anything.
+
+The escape is applied transparently. This only affects operators that use patterns (`contains`, `starts_with`, etc.). Other operators (`=`, `>`, `in`, etc.) are unchanged.
 
 ---
 

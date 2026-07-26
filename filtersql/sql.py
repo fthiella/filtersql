@@ -39,6 +39,8 @@ DBMS_MAP = {
             'not_iregexp':      '{col} not regexp {param}',
         },
         "limit":  'limit {start}, {length}',
+        "like_escape": {"style": "backslash", "escape_char": "\\", "wildcards": ["%", "_"]},
+        "glob_escape": {"style": "bracket", "wildcards": ["*", "?", "["]},
     },
     'Pg': {
         "placeholder":         '%s',
@@ -80,6 +82,7 @@ DBMS_MAP = {
             'not_iregexp':      '{col} !~* {param}'
         },
         "limit": 'limit {length} offset {start}',
+        "like_escape": {"style": "backslash", "escape_char": "\\", "wildcards": ["%", "_"]},
     },
     'DuckDB': {
         "placeholder":         '?',
@@ -118,6 +121,7 @@ DBMS_MAP = {
             'not_iregexp':      '{col} !~* {param}'
         },
         "limit": 'limit {length} offset {start}',
+        "like_escape": {"style": "backslash", "escape_char": "\\", "wildcards": ["%", "_"]},
     },
     'mysql': {
         "placeholder":         '%s',
@@ -159,6 +163,7 @@ DBMS_MAP = {
             'not_iregexp':      '{col} not regexp {param}',
         },
         "limit": 'limit {start}, {length}',
+        "like_escape": {"style": "backslash", "escape_char": "\\", "wildcards": ["%", "_"]},
     },
     'Oracle': {
         "placeholder":         '?',
@@ -196,7 +201,8 @@ DBMS_MAP = {
             'not_regexp':       'not regexp_like({col}, {param})',
             'not_iregexp':      'not regexp_like({col}, {param}, \'i\')',
         },
-        "limit": 'offset {start} rows fetch next {length} rows only'
+        "limit": 'offset {start} rows fetch next {length} rows only',
+        "like_escape": {"style": "backslash", "escape_char": "\\", "wildcards": ["%", "_"]},
     }
 }
 
@@ -223,6 +229,19 @@ class Datasource:
     filtersql Class
     Sql queries for AI, DataTables, LLM outputs and any other Frontend application
     """
+
+    # Operators whose SQL pattern embeds wildcard characters (%, _, *, ?) around
+    # a user-supplied value. Any literal wildcard char inside that value must be
+    # escaped, or it changes match semantics instead of being matched literally.
+    _CASE_SENSITIVE_WILDCARD_OPS = frozenset({
+        'starts_with', 'ends_with', 'contains',
+        'not_starts_with', 'not_ends_with', 'not_contains',
+    })
+    _CASE_INSENSITIVE_WILDCARD_OPS = frozenset({
+        'istarts_with', 'iends_with', 'icontains',
+        'not_istarts_with', 'not_iends_with', 'not_icontains',
+    })
+    _WILDCARD_OPS = _CASE_SENSITIVE_WILDCARD_OPS | _CASE_INSENSITIVE_WILDCARD_OPS
 
     def __init__(
         self, 
@@ -255,7 +274,7 @@ class Datasource:
         self.direction       = direction
         self.fts_language    = fts_language
 
-        self.placeholder     = placeholder if placeholder is not None else DBMS_MAP[dbms]["placeholder"]
+        self.placeholder = placeholder or DBMS_MAP[self.dbms]["placeholder"]
 
     def select(
         self,
@@ -626,9 +645,13 @@ class Datasource:
         """
 
         field      = f.get('field')
-        operator   = f.get('operator', 'icontains')
+        operator   = f.get('operator')
+        if not operator:
+            raise ValidationError(f"Filter is missing required 'operator' key: {f}")
+
         value      = f.get('value')
-        value_type = f.get('value_type', 'text')
+        value_type = f.get('value_type')
+        is_raw     = f.get('raw', False)
 
         if not field:
             raise ValidationError(f"Filter is missing required 'field' key: {f}")
@@ -638,6 +661,7 @@ class Datasource:
             searchcriteria=operator,
             search_value=value,
             value_type=value_type,
+            raw=is_raw,
         )
 
         if operator in ['null', 'notnull']:
@@ -650,9 +674,16 @@ class Datasource:
         elif operator == 'between':
             return sql_frag, list(value)
         else:
-            return sql_frag, [value]
+            return sql_frag, [self._escape_wildcard_value(value, operator)]
 
-    def _build_condition(self, col: str, searchcriteria: str = "icontains", search_value=None, value_type: str = "text") -> str:
+    def _build_condition(
+        self,
+        col: str,
+        searchcriteria: str,
+        search_value=None,
+        value_type: str = "text",
+        raw: bool = False
+    ) -> str:
         if searchcriteria in ['fts', 'fts_query'] and self.dbms not in ['Pg', 'mysql']:
             raise ValidationError(f"FTS operator not supported for {self.dbms}")
 
@@ -675,7 +706,10 @@ class Datasource:
 
             return raw_statement.format(param=self.placeholder, cols=', '.join(parsed_cols))
 
-        if self.dbms == 'Pg' and '->>' in col:
+        if raw:
+            col_expr = str(col)
+            param_expr = self.placeholder
+        elif self.dbms == 'Pg' and '->>' in col:
             parts = col.split('->>')
             main_col = self._quote(parts[0].strip(), DBMS_MAP[self.dbms]["quote"])
             key = parts[1].strip()
@@ -705,7 +739,80 @@ class Datasource:
                 raise ValidationError(f"'between' operator requires a list of two values, got: {search_value!r}")
             return raw_statement.format(col=col_expr, param1=param_expr, param2=param_expr)
 
-        return raw_statement.format(col=col_expr, param=param_expr, lang=self.fts_language)
+        rendered = raw_statement.format(col=col_expr, param=param_expr, lang=self.fts_language)
+        rendered += self._wildcard_escape_clause(searchcriteria)
+        return rendered
+
+    def _wildcard_escape_config(self, operator: str) -> dict:
+        """
+        Returns the escape config (style/char/wildcards) that applies to this
+        operator for the current dialect, or None if the operator isn't a
+        wildcard-pattern operator.
+
+        SQLite is the one dialect that splits wildcard operators across two
+        different matching engines (GLOB for case-sensitive, LIKE for
+        case-insensitive), so it needs its own branch; every other dialect
+        uses LIKE/ILIKE for all of them.
+        """
+        if operator not in self._WILDCARD_OPS:
+            return None
+        dialect_cfg = DBMS_MAP[self.dbms]
+        if self.dbms == 'SQLite' and operator in self._CASE_SENSITIVE_WILDCARD_OPS:
+            return dialect_cfg.get('glob_escape')
+        return dialect_cfg.get('like_escape')
+
+    def _escape_wildcard_value(self, value, operator: str):
+        """
+        Escapes literal wildcard characters (%, _, *, ?, [) in a user-supplied
+        value so that e.g. searching for "50% off" matches the literal string
+        instead of "%" being interpreted as a pattern wildcard.
+
+        Only changes values intended for wildcard operators
+        (contains, starts_with, icontains, etc.)
+        """
+        if value is None or operator not in self._WILDCARD_OPS:
+            return value
+
+        cfg = self._wildcard_escape_config(operator)
+        if not cfg:
+            return value
+
+        value = str(value)
+        wildcard_set = set(cfg['wildcards'])
+
+        # Built as a single pass over the original characters rather than
+        # chained str.replace() calls - chaining rescans text we already
+        # inserted (e.g. escaping '*' -> '[*]' then a later pass over '['
+        # would re-escape the bracket it just introduced).
+        if cfg['style'] == 'backslash':
+            esc = cfg['escape_char']
+            out = []
+            for ch in value:
+                if ch == esc or ch in wildcard_set:
+                    out.append(esc)
+                out.append(ch)
+            return ''.join(out)
+
+        elif cfg['style'] == 'bracket':
+            # GLOB-style: wrapping a metacharacter in its own single-char
+            # bracket class neutralizes it (e.g. '*' -> '[*]').
+            out = []
+            for ch in value:
+                out.append(f'[{ch}]' if ch in wildcard_set else ch)
+            return ''.join(out)
+
+        return value
+
+    def _wildcard_escape_clause(self, operator: str) -> str:
+        """
+        Returns the SQL suffix needed to declare the escape character used
+        above (e.g. " escape '\\'"), or '' if none is needed for this
+        operator/dialect (GLOB doesn't use an ESCAPE clause at all).
+        """
+        cfg = self._wildcard_escape_config(operator)
+        if not cfg or cfg['style'] != 'backslash':
+            return ''
+        return f" escape '{cfg['escape_char']}'"
 
     def _quote(self, name: str, quote: str) -> str:
         """
@@ -719,11 +826,12 @@ class Datasource:
 
         name = str(name).strip()
 
-        if name.startswith(quote) and name.endswith(quote):
-            return name
+        # Security check: null bytes crash many underlying C drivers (e.g., psycopg2)
+        if '\x00' in name:
+            raise InvalidIdentifierError("Identifier contains null byte.")
 
-        # 1. Parse JSONB expressions (Pg)
-        if '->>' in name or '->' in name:
+        # Parse JSONB expressions (Pg)
+        if self.dbms == 'Pg' and ('->>' in name or '->' in name):
             # Split on JSONB operators '->>'' or '->'
             # (?=...) lookahead
             parts = re.split(r'(->>|->)', name)
@@ -742,18 +850,14 @@ class Datasource:
 
             return f"{safe_col}{safe_path}"
 
-        # 2. Parse dot notation (schema.table)
+        # Parse dot notation (schema.table)
         if '.' in name:
             parts = [p.strip() for p in name.split('.') if p.strip()]
             if len(parts) > 2:
                 raise InvalidIdentifierError(f"Too many parts in identifier: {name}")
             return ".".join(self._quote(p, quote) for p in parts)
 
-        # 3. Security check: null bytes crash many underlying C drivers (e.g., psycopg2)
-        if '\x00' in name:
-            raise InvalidIdentifierError("Identifier contains null byte.")
-
-        # 4. Standard Identifier Escaping
+        # Standard Identifier Escaping
         # Pg/SQLite/Oracle: " becomes ""
         # MySQL: ` becomes ``
         escaped_name = name.replace(quote, quote * 2)
@@ -807,12 +911,16 @@ class Datasource:
             length=length
         )
 
-def filtersql(payload=None, dbms='Pg', scope=None, raw_source=False, placeholder=None, **kwargs) -> tuple[str, list]:
+def filtersql(payload=None, dbms=None, scope=None, raw_source=False, placeholder=None, **kwargs) -> tuple[str, list]:
     payload = payload.copy() if payload else {}
     payload.update(kwargs)
 
-    action = payload.get('action', '').lower()
-    source = payload.get('source')
+    action      = payload.get('action', '').lower()
+    source      = payload.get('source')
+    dbms        = dbms or payload.get('dbms') or 'Pg'
+    raw_source  = raw_source or payload.get('raw_source', False)
+    scope       = scope or payload.get('scope')
+    placeholder = placeholder or payload.get('placeholder')
 
     if not source:
         raise ValidationError("Need to specify 'source'.")

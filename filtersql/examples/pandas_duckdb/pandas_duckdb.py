@@ -26,6 +26,7 @@ def query_to_df(payload, **kwargs):
     """Helper: filtersql → DuckDB → DataFrame"""
     query, params = filtersql(payload, dbms='DuckDB', **kwargs)
     print(query)
+    print(params)
     return conn.execute(query, params).fetchdf()
 
 print("1. Active users:\n")
@@ -70,7 +71,7 @@ print("\n" + "-"*30 + "\n")
 
 print("4. AI generated filters (simulation):\n")
 ai_filters = [
-    {'field': 'first_name', 'operator': 'icontains', 'value': 'a'},
+    {'field': 'first_name', 'operator': 'icontains', 'value': 'john'},
     {'field': 'age', 'operator': '>=', 'value': 30}
 ]
 
