@@ -1,6 +1,6 @@
-# filtersql JSON Payload Specification (v1.1)
+# filtersql JSON Payload Specification (v1.2)
 
-**Version**: 1.1 (Draft)
+**Version**: 1.2 (Draft)
 
 This document defines the formal, language-agnostic JSON payload specification for **filtersql**. Any implementation of this protocol (whether written in Python, Node.js, Go, Rust, or any other language) must accept and validate payloads conforming to this standard.
 
@@ -69,7 +69,8 @@ The `filters` array serves as the collection point for constraints. By default, 
 
 #### Atomic Filter Object Properties:
 * `field` (`string`, **Required**): The targeted column name, JSONB keypath (`attributes->>amount`), or schema-prefixed name (`m.author`).
-* `operator` (`string`, **Required**): The evaluation token.
+* `operator` (`string`, **Required**): The evaluation token.  
+  There is no default — every filter must explicitly specify an operator.
 * `value` (Any, Context-Dependent): The target criteria. Omitted for `null`/`notnull` operators. Must be an array for `in`, `notin`, and `between`.
 * `value_type` (`string`, Optional): Instructs explicit datatype casting on evaluation (e.g., `"numeric"`, `"date"`), predominantly utilized in JSONB extraction operations.
 
@@ -152,7 +153,12 @@ To execute high-efficiency pagination over substantial dataset windows without r
 ### 2.5 Group By and Having
 
 `group_by` accepts a list of column names (plain strings).
-`having` uses the exact same filter format as `filters`.
+`having` uses the exact same filter format as `filters` - a `field` is
+quoted as an identifier by default. An aggregate expression like `COUNT(*)`
+is not an identifier, so mark it `"raw": true` and repeat the expression
+itself, rather than referencing the column's `alias`. Referencing the alias
+directly will fail on PostgreSQL, which only exposes `SELECT`-list aliases
+to `ORDER BY`/`GROUP BY`, not to `HAVING`.
 
 ```json
 {
@@ -164,7 +170,7 @@ To execute high-efficiency pagination over substantial dataset windows without r
   ],
   "group_by": ["status"],
   "having": [
-    {"field": "total", "operator": ">", "value": 5}
+    {"field": "COUNT(*)", "raw": true, "operator": ">", "value": 5}
   ]
 }
 ```

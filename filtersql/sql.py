@@ -741,7 +741,11 @@ class Datasource:
                 raise ValidationError(f"'between' operator requires a list of two values, got: {search_value!r}")
             return raw_statement.format(col=col_expr, param1=param_expr, param2=param_expr)
 
-        rendered = raw_statement.format(col=col_expr, param=param_expr, lang=self.fts_language)
+        rendered = raw_statement.format(
+            col=col_expr,
+            param=param_expr,
+            lang=self._safe_sql_literal(self.fts_language),
+        )
         rendered += self._wildcard_escape_clause(searchcriteria)
         return rendered
 
@@ -817,18 +821,27 @@ class Datasource:
         return f" escape '{cfg['escape_char']}'"
 
     @staticmethod
-    def _safe_jsonb_key(raw_key: str) -> str:
+    def _safe_sql_literal(raw_value: str) -> str:
         """
-        Sanitizes a JSONB key extracted from a '->>' path expression before it
-        is embedded in a single-quoted SQL string literal.
+        Sanitizes a string before it is embedded directly inside a
+        single-quoted SQL string literal (i.e. NOT as a bound parameter).
+
+        Used anywhere a value has to be spliced into the SQL text itself
+        rather than passed as a placeholder - e.g. a JSONB key extracted
+        from a '->>' path expression, or a full-text-search language name
+        embedded in websearch_to_tsquery('{lang}', ...).
 
         Strips surrounding whitespace/quote characters, then escapes any
         embedded single quote by doubling it (standard SQL string literal
-        escaping). Without this, a key such as "amount' or '1'='1" would
+        escaping). Without this, a value such as "amount' or '1'='1" would
         break out of the surrounding '...' literal and inject arbitrary SQL.
         """
-        key = str(raw_key).strip().strip("\"'")
-        return key.replace("'", "''")
+        value = str(raw_value).strip().strip("\"'")
+        return value.replace("'", "''")
+
+    # Kept as an alias: _safe_jsonb_key was the original, narrower name for
+    # this helper before it was generalized to cover fts_language too.
+    _safe_jsonb_key = _safe_sql_literal
 
     def _quote(self, name: str, quote: str) -> str:
         """
@@ -929,7 +942,7 @@ def filtersql(payload=None, dbms=None, scope=None, raw_source=False, placeholder
     payload = payload.copy() if payload else {}
     payload.update(kwargs)
 
-    action      = payload.get('action', '').lower()
+    action      = (payload.get('action', '') or '').lower()
     source      = payload.get('source')
     dbms        = dbms or payload.get('dbms') or 'Pg'
     raw_source  = raw_source or payload.get('raw_source', False)

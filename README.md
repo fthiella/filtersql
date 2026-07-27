@@ -78,7 +78,7 @@ select
 from
   "users"
 where
-  "name" ilike '%' || ? || '%'
+  ("name" like '%' || ? || '%' escape '\')
 ```
 
 with values:
@@ -103,23 +103,19 @@ pip install filtersql
 import filtersql
 
 ds = filtersql.Datasource(
-    source      = 'users',
-    dbms        = 'Pg',
-    placeholder = '%s',
+    source='users',
+    dbms='SQLite',
+    placeholder='?',
 )
 
 query, values = ds.select(
-    columns = [
-        {'field': 'id'},
-        {'field': 'first_name'},
-        {'field': 'last_name'},
-    ],
-    filters = [
+    columns=['id', 'first_name', 'last_name'],
+    filters=[
         {'field': 'first_name', 'operator': 'icontains', 'value': 'John'},
         {'field': 'last_name',  'operator': 'icontains', 'value': 'Smith'},
     ],
-    order = [{'field': 'first_name', 'order': 'asc'}],
-    limit = {'start': 0, 'length': 10},
+    order=[{'field': 'first_name', 'order': 'asc'}],
+    limit={'start': 0, 'length': 10},
 )
 
 print(query)
@@ -130,19 +126,14 @@ print(query)
 # from
 #   "users"
 # where
-#   ("first_name" ilike chr(37) || %s || chr(37) escape '\' and "last_name" ilike chr(37) || %s || chr(37) escape '\')
+#   ("first_name" like '%' || ? || '%' escape '\' and "last_name" like '%' || ? || '%' escape '\')
 # order by
 #   "first_name" asc
-# limit 10 offset 0
+# limit 0, 10
 
 print(values)
 # ['John', 'Smith']
-
-cursor.execute(query, values)
-rows = cursor.fetchall()
 ```
-_Note_: PostgreSQL uses `chr(37)` instead of `'%'` for compatibility, and `escape '\'` is
-added automatically to handle wildcard characters in search values.
 
 ---
 
@@ -196,7 +187,7 @@ filters = [
         {'field': 'last_name',  'operator': 'icontains', 'value': 'john'},
     ]},
 ]
-# → "status" = ? AND ("first_name" like '%'||?||'%' OR "last_name" like '%'||?||'%')
+# → "status" = ? AND ("first_name" like '%'||?||'%' escape '\' OR "last_name" like '%'||?||'%' escape '\')
 ```
 
 ### Nesting
@@ -385,17 +376,20 @@ print(ds.debug(query, values))
 # from
 #   "users"
 # where
-#   ("first_name" ilike '%' || 'John' || '%')
+#   ("first_name" ilike chr(37) || 'John' || chr(37) escape '\')
 ```
 
 ---
 
 ## Wildcard Escape in Pattern Matching
 
-Operators like `contains`, `icontains`, `starts_with`, etc. use `like` or `glob` patterns.
+Operators like `contains`, `icontains`, `starts_with`, etc. use `like` (or, for
+SQLite's case-sensitive variants, `glob`) patterns.
 
-`filtersql` automatically escapes wildcard characters (`%`, `_`, `*`, `?`, `[`) in the
-search value, so searching for `"100%"` finds the literal string `"100%"`, not `"100"` + anything.
+`filtersql` automatically escapes the wildcard characters that matter for
+whichever mechanism is in play - `%` and `_` for `like`/`ilike`, or `*`, `?`
+and `[` for SQLite's `glob` - so searching for `"100%"` finds the literal
+string `"100%"`, not `"100"` followed by anything.
 
 The escape is applied transparently. This only affects operators that use patterns (`contains`, `starts_with`, etc.). Other operators (`=`, `>`, `in`, etc.) are unchanged.
 
@@ -422,6 +416,10 @@ cursor.execute(query, values)  # always parameterized, always safe
 ```
 
 The simplest version without Pydantic:
+
+> Note: the schema below restricts `value` to a plain string, so it only
+> works with scalar operators (`=`, `icontains`, etc.). Operators that need
+> a list (`in`, `between`) require widening `value`'s schema type accordingly.
 
 ```python
 import json

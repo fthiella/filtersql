@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.2] - 2026-07-27
+### Security
+- Fixed a SQL injection vulnerability affecting the `fts_language`
+  constructor parameter. A value containing a single quote could break out
+  of the `websearch_to_tsquery(...)` string literal and inject arbitrary SQL.
+- Affected: any application passing an `fts_language` value that isn't a
+  fixed, developer-controlled string (e.g. derived from a user-facing
+  locale/language selector) when using the `fts`/`fts_query` operators on
+  Postgres.
+- Not affected: applications that hardcode `fts_language`, don't use
+  full-text search, or use a non-Postgres dialect.
+- Upgrade recommended for all users of 1.2.x.
+
 ## [1.2.1] - 2026-07-27
 ### Security
 - Fixed a SQL injection vulnerability affecting Postgres JSONB (`->>`) filter
