@@ -701,7 +701,8 @@ class Datasource:
                 if self.dbms == 'Pg' and '->>' in c:
                     parts = c.split('->>')
                     main_col = self._quote(parts[0].strip(), DBMS_MAP[self.dbms]["quote"])
-                    parsed_cols.append(f"{main_col}->>'{parts[1].strip()}'")
+                    safe_key = self._safe_jsonb_key(parts[1])
+                    parsed_cols.append(f"{main_col}->>'{safe_key}'")
                 else:
                     parsed_cols.append(self._quote(c, DBMS_MAP[self.dbms]["quote"]))
 
@@ -713,7 +714,7 @@ class Datasource:
         elif self.dbms == 'Pg' and '->>' in col:
             parts = col.split('->>')
             main_col = self._quote(parts[0].strip(), DBMS_MAP[self.dbms]["quote"])
-            key = parts[1].strip()
+            key = self._safe_jsonb_key(parts[1])
 
             if value_type == 'numeric':
                 col_expr = f"({main_col}->>'{key}')::numeric"
@@ -815,6 +816,20 @@ class Datasource:
             return ''
         return f" escape '{cfg['escape_char']}'"
 
+    @staticmethod
+    def _safe_jsonb_key(raw_key: str) -> str:
+        """
+        Sanitizes a JSONB key extracted from a '->>' path expression before it
+        is embedded in a single-quoted SQL string literal.
+
+        Strips surrounding whitespace/quote characters, then escapes any
+        embedded single quote by doubling it (standard SQL string literal
+        escaping). Without this, a key such as "amount' or '1'='1" would
+        break out of the surrounding '...' literal and inject arbitrary SQL.
+        """
+        key = str(raw_key).strip().strip("\"'")
+        return key.replace("'", "''")
+
     def _quote(self, name: str, quote: str) -> str:
         """
         Secure quoting that distinguishes between column and table context.
@@ -844,9 +859,7 @@ class Datasource:
             safe_path = ""
             for i in range(1, len(parts), 2):
                 operator = parts[i]
-                key = parts[i+1].strip().strip("\"'")
-                # Escape single quotes in the JSON key
-                safe_key = key.replace("'", "''")
+                safe_key = self._safe_jsonb_key(parts[i+1])
                 safe_path += f"{operator}'{safe_key}'"
 
             return f"{safe_col}{safe_path}"

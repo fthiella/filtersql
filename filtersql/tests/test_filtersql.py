@@ -407,6 +407,38 @@ class TestJsonbColumns(unittest.TestCase):
         self.assertNotIn('::date', q)
         self.assertEqual(v, ['foo'])
 
+    def test_jsonb_key_quote_injection_is_escaped(self):
+        """
+        Regression test: a JSONB key containing a single quote must not be
+        able to break out of the surrounding '...' string literal in a
+        filter's WHERE clause.
+        """
+        ds = make_ds()
+        malicious_key = "amount' or '1'='1"
+        q, v = get_query(ds, filters=[{'field': f'attributes->>{malicious_key}', 'operator': '=', 'value': '10'}])
+        # The quote inside the key must be doubled (escaped), not left raw
+        self.assertIn("'amount'' or ''1''=''1'", q)
+        # And the injected clause must NOT appear as live, unescaped SQL
+        self.assertNotIn("'amount' or '1'='1'", q)
+
+    def test_jsonb_key_quote_injection_is_escaped_with_cast(self):
+        ds = make_ds()
+        malicious_key = "amt' or '1'='1"
+        q, v = get_query(ds, filters=[
+            {'field': f'attributes->>{malicious_key}', 'operator': '>=', 'value': '10', 'value_type': 'numeric'}
+        ])
+        self.assertIn("'amt'' or ''1''=''1'", q)
+        self.assertNotIn("'amt' or '1'='1'", q)
+
+    def test_reverse_in_jsonb_key_quote_injection_is_escaped(self):
+        ds = make_ds()
+        malicious_key = "a' or '1'='1"
+        q, v = get_query(ds, filters=[
+            {'field': f"col1, attributes->>{malicious_key}", 'operator': 'reverse_in', 'value': 'x'}
+        ])
+        self.assertIn("'a'' or ''1''=''1'", q)
+        self.assertNotIn("'a' or '1'='1'", q)
+
 
 # ---------------------------------------------------------------------------
 # 6. Limit / pagination

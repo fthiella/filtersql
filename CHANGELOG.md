@@ -2,6 +2,20 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.1] - 2026-07-27
+### Security
+- Fixed a SQL injection vulnerability affecting Postgres JSONB (`->>`) filter
+  fields. A `field` value containing a single quote could break out of the
+  generated string literal and inject arbitrary SQL into the WHERE clause.
+  Also affected the `reverse_in` operator.
+- Affected: any application using `filtersql` with Postgres and
+  passing filter `field` values that aren't fully controlled by the developer
+  (e.g. exposed via a REST API or generated from LLM output), where those
+  filters target JSONB paths (`col->>key`).
+- Not affected: filters that don't use JSONB paths, or any non-Postgres
+  dialect (MySQL, SQLite, etc.).
+- Upgrade recommended for all users of 1.2.
+
 ## [1.2] - 2026-07-26
 
 ### Security

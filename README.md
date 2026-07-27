@@ -270,6 +270,8 @@ columns = [
 ]
 ```
 
+Note: `raw=True` bypasses quoting/escaping entirely — never pass untrusted input as field when set.
+
 ---
 
 ## Insert, update, delete
