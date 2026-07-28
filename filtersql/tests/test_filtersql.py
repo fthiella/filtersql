@@ -54,7 +54,7 @@ class TestBasicSelect(unittest.TestCase):
         self.assertIn('"users"', q)
 
     def test_raw_source_not_quoted(self):
-        ds = make_ds(source='(select * from foo) sub', raw_source=True)
+        ds = make_ds(source='(select * from foo) sub', raw_source=True, allow_raw_source=True)
         q, _ = get_query(ds)
         self.assertIn('(select * from foo) sub', q)
         self.assertNotIn('"(select', q)
@@ -236,7 +236,7 @@ class TestFilterOperators(unittest.TestCase):
     def test_in_empty_list(self):
         ds = make_ds()
         q, v = get_query(ds, filters=[{'field': 'id', 'operator': 'in', 'value': []}])
-        self.assertIn('"id" in ()', q)
+        self.assertIn('1 = 0', q)
         self.assertEqual(v, [])
 
     # regexp
@@ -833,6 +833,18 @@ class TestQuoteInSQL(unittest.TestCase):
 
 class TestDebug(unittest.TestCase):
 
+    def setUp(self):
+        # debug() is gated behind this env var to prevent accidental use in
+        # production; enable it for the duration of these tests only.
+        self._prev_debug_env = os.environ.get('FILTERSQL_DEBUG')
+        os.environ['FILTERSQL_DEBUG'] = '1'
+
+    def tearDown(self):
+        if self._prev_debug_env is None:
+            os.environ.pop('FILTERSQL_DEBUG', None)
+        else:
+            os.environ['FILTERSQL_DEBUG'] = self._prev_debug_env
+
     def test_debug_replaces_string_value(self):
         ds = make_ds()
         q, v = ds.where(filters=[{'field': 'first_name', 'operator': '=', 'value': 'John'}])
@@ -931,7 +943,7 @@ class TestResolveSource(unittest.TestCase):
         self.assertEqual(ds._resolve_source(), '"users"')
 
     def test_raw_source_not_quoted(self):
-        ds = make_ds(source='(select * from foo) sub', raw_source=True)
+        ds = make_ds(source='(select * from foo) sub', raw_source=True, allow_raw_source=True)
         self.assertEqual(ds._resolve_source(), '(select * from foo) sub')
 
     def test_schema_source_quoted(self):
@@ -1297,6 +1309,74 @@ class TestCursorPagination(unittest.TestCase):
         self.assertIn(' or ', q)
         self.assertEqual(v, ['Smith', 'John', 100, 'Smith', 'John', 'Smith'])
 
+    def test_next_mixed_direction_composite(self):
+        """
+        Regression test: when columns in `order` have different sort
+        directions, the keyset comparison operator must be flipped
+        per-column, not applied uniformly.
+        """
+        ds = make_ds(order=[
+            {'field': 'created_at', 'order': 'asc'},
+            {'field': 'id', 'order': 'desc'},
+        ])
+        q, v = get_query(ds,
+            cursor={'created_at': '2026-01-01', 'id': 42},
+            direction='next'
+        )
+        self.assertIn('"created_at" = %s', q)
+        self.assertIn('"id" < %s', q)   # desc column: 'next' means smaller id
+        self.assertIn('"created_at" > %s', q)
+        self.assertEqual(v, ['2026-01-01', 42, '2026-01-01'])
+
+    def test_prev_mixed_direction_composite(self):
+        ds = make_ds(order=[
+            {'field': 'created_at', 'order': 'asc'},
+            {'field': 'id', 'order': 'desc'},
+        ])
+        q, v = get_query(ds,
+            cursor={'created_at': '2026-01-01', 'id': 42},
+            direction='prev'
+        )
+        self.assertIn('"created_at" = %s', q)
+        self.assertIn('"id" > %s', q)   # desc column: 'prev' means larger id
+        self.assertIn('"created_at" < %s', q)
+
+    def test_cursor_respects_per_call_order_override(self):
+        """
+        Regression test: cursor keyset logic must use the `order` actually
+        passed to this select() call, not silently fall back to whatever
+        `order` the Datasource was constructed with.
+        """
+        ds = make_ds(order=[
+            {'field': 'created_at', 'order': 'asc'},
+            {'field': 'id', 'order': 'asc'},
+        ])
+        override_order = [
+            {'field': 'created_at', 'order': 'asc'},
+            {'field': 'id', 'order': 'desc'},
+        ]
+        q, v = get_query(ds,
+            order=override_order,
+            cursor={'created_at': '2026-01-01', 'id': 42},
+            direction='next'
+        )
+        self.assertIn('"id" < %s', q)      # must follow the override, not construction-time order
+        self.assertIn('order by\n  "created_at" asc,\n  "id" desc', q)
+
+    def test_cursor_without_configured_order_raises(self):
+        """
+        Keyset pagination (next/prev) without an explicit order configuration
+        must raise a ValidationError to prevent non-deterministic SQL queries.
+        """
+        ds = make_ds()
+        with self.assertRaises(ValidationError):
+            get_query(ds, cursor={'id': 100}, direction='next')
+
+    def test_missing_order_raises_validation_error(self):
+        ds = make_ds()
+        with self.assertRaises(ValidationError):
+            get_query(ds, cursor={'id': 100}, direction='next')
+
     def test_cursor_with_search_filters(self):
         ds = make_ds(order=[{'field': 'id', 'order': 'asc'}])
         q, v = get_query(ds,
@@ -1373,15 +1453,6 @@ class TestCursorPagination(unittest.TestCase):
         self.assertEqual(v[1], 'John')   # current inequality
         self.assertEqual(v[2], 'Smith')  # second OR condition
         self.assertEqual(v[3], 'active') # search filter
-
-    def test_missing_order_uses_default_asc(self):
-        ds = make_ds()  # No order specified
-        q, v = get_query(ds,
-            cursor={'id': 100},
-            direction='next'
-        )
-        # Should still work with default order
-        self.assertIn('"id" > %s', q)
 
     def test_cursor_with_null_values(self):
         ds = make_ds(order=[{'field': 'id', 'order': 'asc'}])
@@ -1530,7 +1601,8 @@ class TestCursorViaFiltersqlFunction(unittest.TestCase):
         payload = {
             'action': 'select',
             'source': 'users',
-            'columns': ['id', 'name']
+            'columns': ['id', 'name'],
+            'order': [{'field': 'id', 'order': 'asc'}]
         }
         q, v = sql.filtersql(
             payload,
@@ -1560,7 +1632,7 @@ class TestColumnFeatures(unittest.TestCase):
         self.assertIn('"name" as "user_name"', q)
 
     def test_columns_with_raw(self):
-        ds = make_ds()
+        ds = make_ds(allow_raw_fields=True)
         q, v = ds.select(columns=[
             {'field': 'COUNT(*)', 'raw': True, 'alias': 'total'}
         ])
@@ -1568,7 +1640,7 @@ class TestColumnFeatures(unittest.TestCase):
         self.assertNotIn('"COUNT(*),"', q)
 
     def test_columns_mixed(self):
-        ds = make_ds()
+        ds = make_ds(allow_raw_fields=True)
         q, v = ds.select(columns=[
             'id',
             {'field': 'name', 'alias': 'full_name'},
@@ -1580,7 +1652,7 @@ class TestColumnFeatures(unittest.TestCase):
 
 class TestGroupByHaving(unittest.TestCase):
     def test_group_by(self):
-        ds = make_ds()
+        ds = make_ds(allow_raw_fields=True)
         q, v = ds.select(
             columns=[
                 {'field': 'status', 'alias': 'status_group'},
@@ -1593,7 +1665,7 @@ class TestGroupByHaving(unittest.TestCase):
         self.assertIn('"status"', q)
 
     def test_having(self):
-        ds = make_ds()
+        ds = make_ds(allow_raw_fields=True)
         q, v = ds.select(
             columns=[
                 {'field': 'status', 'alias': 'status_group'},
@@ -1607,7 +1679,7 @@ class TestGroupByHaving(unittest.TestCase):
 
     def test_full_aggregation_pipeline(self):
         """Tests WHERE, GROUP BY, HAVING, and ORDER BY all combined."""
-        ds = make_ds()
+        ds = make_ds(allow_raw_fields=True)
         q, v = ds.select(
             columns=[
                 {'field': 'department', 'alias': 'dept'},

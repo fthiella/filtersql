@@ -1,6 +1,6 @@
-# filtersql JSON Payload Specification (v1.2)
+# filtersql JSON Payload Specification (v1.2.3)
 
-**Version**: 1.2 (Draft)
+**Version**: 1.2.3 (Draft)
 
 This document defines the formal, language-agnostic JSON payload specification for **filtersql**. Any implementation of this protocol (whether written in Python, Node.js, Go, Rust, or any other language) must accept and validate payloads conforming to this standard.
 
@@ -93,6 +93,11 @@ The `filters` array serves as the collection point for constraints. By default, 
 | `regexp`, `not_regexp` | Regular expression / exclusion (Case-Sensitive) | `string` | Native Regex tokens (`~`, `!~`, `regexp_like`) |
 | `iregexp`, `not_iregexp` | Regular expression / exclusion (Case-Insensitive) | `string` | Native Regex tokens (`~*`, `!~*`, etc.) |
 | `fts`, `fts_query` | Full-Text Search processing | `string` | `@@ websearch_to_tsquery` or `MATCH AGAINST` |
+
+#### Empty List Handling for Set Operators (`in` / `notin`)
+Passing an empty array (`"value": []`) to set evaluation operators is safely translated into deterministic SQL truths without throwing syntax errors:
+* `"operator": "in"` with `[]` evaluates to `1 = 0` (Always FALSE).
+* `"operator": "notin"` with `[]` evaluates to `1 = 1` (Always TRUE).
 
 #### Nested Logical Groups (`or` / `and`):
 Complex trees are supported recursively by defining an object containing a single key (`"or"` or `"and"`) containing a sub-array of filter definitions.
@@ -269,7 +274,10 @@ to `ORDER BY`/`GROUP BY`, not to `HAVING`.
             "field": { "type": "string" },
             "operator": { "type": "string" },
             "value": {},
-            "value_type": { "type": "string", "enum": ["text", "numeric", "date"] }
+            "value_type": {
+              "type": "string",
+              "enum": ["text", "numeric", "integer", "bigint", "date", "timestamp", "timestamptz", "boolean", "uuid"]
+            }
           }
         },
         {

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import re
+import os
 
 DBMS_MAP = {
     'SQLite': {
@@ -244,12 +245,20 @@ class Datasource:
     })
     _WILDCARD_OPS = _CASE_SENSITIVE_WILDCARD_OPS | _CASE_INSENSITIVE_WILDCARD_OPS
 
+    _PG_ALLOWED_CAST_TYPES = frozenset({
+        'numeric', 'integer', 'bigint', 'real', 'double precision',
+        'date', 'timestamp', 'timestamptz', 'time',
+        'boolean', 'uuid'
+    })
+
     def __init__(
         self, 
-        *, 
-        source: str = None,
+        *,
         dbms: str = None,
+        source: str = None,
         raw_source: bool = False,
+        allow_raw_source: bool = False,
+        allow_raw_fields: bool = False,
         order: list = None,
         limit: dict = None,
         scope: dict = None,
@@ -260,7 +269,9 @@ class Datasource:
         """
         Datasource initialization
         """
-        self.dbms            = dbms
+        self.dbms             = dbms
+        self.allow_raw_source = allow_raw_source
+        self.allow_raw_fields = allow_raw_fields
 
         if not self.dbms or self.dbms not in DBMS_MAP:
             raise ConfigurationError(
@@ -320,6 +331,10 @@ class Datasource:
                     raise ValidationError(f"Column dict missing 'field' or 'name': {x}")
 
                 if x.get('raw', False):
+                    if not self.allow_raw_fields:
+                        raise ConfigurationError(
+                            "raw columns/filters are disabled. Set allow_raw_fields=True to enable."
+                        )
                     raw_sql = str(field)
                     alias = x.get('alias') or x.get('as')
                     if alias:
@@ -335,7 +350,8 @@ class Datasource:
                 raise ValidationError(f"Invalid column format: {x}")
 
         active_direction = direction or self.direction
-        where_clause, where_values = self.where(filters=filters, direction=active_direction, cursor=cursor)
+        active_order = order if order is not None else self.order
+        where_clause, where_values = self.where(filters=filters, direction=active_direction, cursor=cursor, order=active_order)
 
         having_clause = ""
         having_values = []
@@ -344,7 +360,6 @@ class Datasource:
         
         values = where_values + having_values
 
-        active_order = order if order is not None else self.order
         parsed_order = [
             self._quote(x.get('field'), quote_char)
             + " "
@@ -511,6 +526,12 @@ class Datasource:
         WARNING: This method outputs raw SQL with interpolated values.
         Only use for debugging in development environments.
         """
+        if not os.getenv('FILTERSQL_DEBUG', '').lower() in ('1', 'true', 'yes', 'on'):
+            raise RuntimeError(
+                "debug() is disabled. Set FILTERSQL_DEBUG=1 to enable it. "
+                "Never use this in production."
+            )
+
         debug_query = query
         for val in values:
             if isinstance(val, str):
@@ -525,14 +546,54 @@ class Datasource:
 
         return debug_query
 
-    def where(self, *, filters: list = None, direction: str = None, cursor: dict = None) -> tuple[str, list]:
+    def where(self, *, filters: list = None, direction: str = None, cursor: dict = None, order: list = None) -> tuple[str, list]:
         """Build a WHERE clause from filters and cursor. Returns (clause, values)."""
         active_direction = direction or self.direction
+        active_order = order if order is not None else self.order
+
+        if cursor is not None and not isinstance(cursor, dict):
+            raise ValidationError(
+                f"Invalid cursor format. Expected dict, got: {type(cursor).__name__}"
+            )
+
+        if cursor and not active_direction:
+            raise ValidationError(
+                "A 'direction' ('seek', 'next', 'prev') must be provided when using a 'cursor'."
+            )
+
+        if cursor and active_direction and active_direction not in ('seek', 'next', 'prev'):
+            raise ValidationError(
+                f"Invalid direction '{active_direction}'. Please use: seek, next, prev."
+            )
+
+        if cursor and active_direction in ('next', 'prev'):
+            if not active_order:
+                raise ValidationError(
+                    f"Keyset pagination ('{active_direction}') requires an 'order' configuration."
+                )
+
+            order_fields = [o['field'] for o in active_order]
+            order_field_set = set(order_fields)
+
+            # 1. every cursor key must be in order
+            extra = [k for k in cursor if k not in order_field_set]
+            if extra:
+                raise ValidationError(
+                    f"Cursor field(s) {extra} must be present in 'order' for keyset pagination."
+                )
+
+            # 2. every order field must be present in the cursor
+            missing = [f for f in order_fields if f not in cursor]
+            if missing:
+                raise ValidationError(
+                    f"Cursor is missing required order field(s): {missing}"
+                )
+
         scope_filters = [{'field': k, 'operator': '=', 'value': v} for k, v in self.scope.items()]
         all_filters = scope_filters + list(filters or [])
 
         if all_filters or cursor:
-            return self._build_where(filters=all_filters, direction=active_direction, dbms=self.dbms, cursor=cursor)
+            return self._build_where(filters=all_filters, direction=active_direction, dbms=self.dbms, cursor=cursor, order=active_order)
         return "", []
 
     def having(self, *, filters: list = None) -> tuple[str, list]:
@@ -543,23 +604,8 @@ class Datasource:
             return "", []
         return self._build_filter_group(filters, join='and')
 
-    def _build_where(self, *, filters: list, direction: str, dbms: str, cursor: dict = None) -> tuple[str, list]:
+    def _build_where(self, *, filters: list, direction: str, dbms: str, cursor: dict = None, order: list = None) -> tuple[str, list]:
         """Build a WHERE clause from filters. Returns (clause, values)."""
-
-        # --- 1. Cursor & Direction Consistency Validation ---
-        if cursor is not None and not isinstance(cursor, dict):
-            raise ValidationError(f"Invalid cursor format. Expected dict, got: {type(cursor).__name__}")
-
-        if cursor and not direction:
-            raise ValidationError("A 'direction' ('seek', 'next', 'prev') must be provided when using a 'cursor'.")
-
-        if direction and not cursor:
-            raise ValidationError(f"A 'cursor' dictionary must be provided when using direction '{direction}'.")
-
-        if direction and direction not in ['seek', 'next', 'prev']:
-            raise ValidationError(f"Invalid direction '{direction}'. Please use: seek, next, prev.")
-
-        operators = {'seek': '=', 'next': '>', 'prev': '<'}
 
         # --- 2. Filter Format Validation ("Fail Fast") ---
         for item in filters:
@@ -570,34 +616,56 @@ class Datasource:
         m_data = []
 
         # --- 3. Build Cursor Keyset Pagination ---
-        if cursor and direction:  # We now mathematically know both exist and are valid
-            op = operators[direction]
-            cursor_items = list(cursor.items())
+        if cursor and direction:
+            quote = DBMS_MAP[dbms]['quote']
+
+            # field → its declared order direction (missing = 'asc', matching
+            # historical behavior so cursor pagination doesn't silently drop
+            # its WHERE condition when `order` isn't configured for a field).
+            order_map = {
+                o['field']: o.get('order', 'asc')
+                for o in (order or [])
+            }
+
+            if direction == 'seek':
+                cursor_items = list(cursor.items())
+            else:
+                cursor_items = [
+                    (o['field'], cursor[o['field']])
+                    for o in (order or [])
+                ]
 
             if direction == 'seek':
                 conditions = []
                 for k, v in cursor_items:
                     conditions.append(
-                        f"{self._quote(k, DBMS_MAP[dbms]['quote'])} = {self.placeholder}"
+                        f"{self._quote(k, quote)} = {self.placeholder}"
                     )
                     m_data.append(v)
                 m_where.append(' and '.join(conditions))
             else:
-                # Keyset pagination multi-column logic
+                # Proper multi-column keyset with per-column ASC/DESC awareness
                 or_conditions = []
                 for i in reversed(range(len(cursor_items))):
                     and_parts = []
+
+                    # equality on the more-significant columns
                     for j in range(i):
                         k, v = cursor_items[j]
                         and_parts.append(
-                            f"{self._quote(k, DBMS_MAP[dbms]['quote'])} = {self.placeholder}"
+                            f"{self._quote(k, quote)} = {self.placeholder}"
                         )
                         m_data.append(v)
+
+                    # inequality on the current column
                     k, v = cursor_items[i]
+                    col_order = order_map.get(k, 'asc')
+                    op = self._cursor_operator(direction, col_order)
                     and_parts.append(
-                        f"{self._quote(k, DBMS_MAP[dbms]['quote'])} {op} {self.placeholder}"
+                        f"{self._quote(k, quote)} {op} {self.placeholder}"
                     )
                     m_data.append(v)
+
                     or_conditions.append('(' + ' and '.join(and_parts) + ')')
                 m_where.append(' or '.join(or_conditions))
 
@@ -654,6 +722,7 @@ class Datasource:
         value_type = f.get('value_type')
         is_raw     = f.get('raw', False)
 
+
         if not field:
             raise ValidationError(f"Filter is missing required 'field' key: {f}")
 
@@ -669,13 +738,22 @@ class Datasource:
             return sql_frag, []
         elif operator in ['in', 'notin']:
             if isinstance(value, (list, tuple)):
-                return sql_frag, list(value)
+                vals = list(value)
             else:
-                return sql_frag, [value]
+                vals = [value] if value is not None else []
+
+            if not vals:
+                return sql_frag, []
+
+            return sql_frag, vals
         elif operator == 'between':
             return sql_frag, list(value)
         else:
-            return sql_frag, [self._escape_wildcard_value(value, operator)]
+            if operator in self._WILDCARD_OPS and value is not None:
+                escaped_value = self._escape_wildcard_value(value, operator)
+            else:
+                escaped_value = value
+            return sql_frag, [escaped_value]
 
     def _build_condition(
         self,
@@ -685,6 +763,9 @@ class Datasource:
         value_type: str = "text",
         raw: bool = False
     ) -> str:
+        if raw and not self.allow_raw_fields:
+            raise ConfigurationError("raw columns/filters are disabled. Set allow_raw_fields=True to enable.")
+
         if searchcriteria in ['fts', 'fts_query'] and self.dbms not in ['Pg', 'mysql']:
             raise ValidationError(f"FTS operator not supported for {self.dbms}")
 
@@ -701,7 +782,7 @@ class Datasource:
                 if self.dbms == 'Pg' and '->>' in c:
                     parts = c.split('->>')
                     main_col = self._quote(parts[0].strip(), DBMS_MAP[self.dbms]["quote"])
-                    safe_key = self._safe_jsonb_key(parts[1])
+                    safe_key = self._safe_jsonb_key(parts[1].strip())
                     parsed_cols.append(f"{main_col}->>'{safe_key}'")
                 else:
                     parsed_cols.append(self._quote(c, DBMS_MAP[self.dbms]["quote"]))
@@ -714,14 +795,17 @@ class Datasource:
         elif self.dbms == 'Pg' and '->>' in col:
             parts = col.split('->>')
             main_col = self._quote(parts[0].strip(), DBMS_MAP[self.dbms]["quote"])
-            key = self._safe_jsonb_key(parts[1])
+            key = self._safe_jsonb_key(parts[1].strip())
 
-            if value_type == 'numeric':
-                col_expr = f"({main_col}->>'{key}')::numeric"
-                param_expr = f"{self.placeholder}::numeric"
-            elif value_type == 'date':
-                col_expr = f"({main_col}->>'{key}')::date"
-                param_expr = f"{self.placeholder}::date"
+            if value_type:
+                cast_type = value_type.lower()
+                if cast_type not in self._PG_ALLOWED_CAST_TYPES:
+                    raise ValidationError(
+                        f"Invalid value_type '{value_type}' for JSONB path. "
+                        f"Allowed: {sorted(list(self._PG_ALLOWED_CAST_TYPES))}"
+                    )
+                col_expr = f"({main_col}->>'{key}')::{cast_type}"
+                param_expr = f"{self.placeholder}::{cast_type}"
             else:
                 col_expr = f"{main_col}->>'{key}'"
                 param_expr = self.placeholder
@@ -730,6 +814,13 @@ class Datasource:
             param_expr = self.placeholder
 
         if searchcriteria in ['in', 'notin']:
+            if searchcriteria == 'in':
+                if not search_value:
+                    return "1 = 0"
+            elif searchcriteria == 'notin':
+                if not search_value:
+                    return "1 = 1"
+
             if not isinstance(search_value, (list, tuple)):
                 search_value = [search_value] if search_value is not None else []
 
@@ -831,13 +922,20 @@ class Datasource:
         from a '->>' path expression, or a full-text-search language name
         embedded in websearch_to_tsquery('{lang}', ...).
 
-        Strips surrounding whitespace/quote characters, then escapes any
-        embedded single quote by doubling it (standard SQL string literal
-        escaping). Without this, a value such as "amount' or '1'='1" would
-        break out of the surrounding '...' literal and inject arbitrary SQL.
+        Escapes any embedded single quote by doubling it (standard SQL
+        string literal escaping). Without this, a value such as
+        "amount' or '1'='1" would break out of the surrounding '...'
+        literal and inject arbitrary SQL.
+
+        Deliberately does NOT trim whitespace or strip quote characters -
+        either could be meaningful, real content (e.g. a JSONB key that
+        legitimately has a trailing space, common in data imported from
+        spreadsheets/CSVs) and this function has no way to distinguish
+        that from incidental formatting. Cosmetic whitespace around the
+        '->>' operator is trimmed at the parsing site instead, before
+        this function ever sees the value.
         """
-        value = str(raw_value).strip().strip("\"'")
-        return value.replace("'", "''")
+        return str(raw_value).replace("'", "''")
 
     # Kept as an alias: _safe_jsonb_key was the original, narrower name for
     # this helper before it was generalized to cover fts_language too.
@@ -898,6 +996,22 @@ class Datasource:
             return 'desc' if ord == 'asc' else 'asc'
         return ord
 
+    def _cursor_operator(self, direction: str, col_order: str) -> str:
+        """
+        Decide the comparison operator for one cursor column,
+        taking both navigation direction and the column’s own
+        sort direction into account.
+        """
+        if col_order not in ('asc', 'desc'):
+            raise ValidationError("order must be 'asc' or 'desc'")
+        if direction == 'seek':
+            return '='
+        if direction == 'next':
+            return '>' if col_order == 'asc' else '<'
+        if direction == 'prev':
+            return '<' if col_order == 'asc' else '>'
+        raise ValidationError(f"Invalid direction '{direction}'")
+
     def _resolve_source(self) -> str:
         """
         Resolves the source (table or subquery).
@@ -922,6 +1036,9 @@ class Datasource:
                 )
         """
         if self.raw_source:
+            if not self.allow_raw_source:
+                raise ConfigurationError("raw_source is disabled. Set allow_raw_source=True to enable.")
+
             # Intentionally raw for subquery injection
             # Example: "(SELECT * FROM users WHERE id > 100) AS filtered_users"
             return self.source
@@ -938,14 +1055,14 @@ class Datasource:
             length=length
         )
 
-def filtersql(payload=None, dbms=None, scope=None, raw_source=False, placeholder=None, **kwargs) -> tuple[str, list]:
+def filtersql(payload=None, dbms=None, scope=None, raw_source=False, allow_raw_source=False, allow_raw_fields=False, placeholder=None, **kwargs) -> tuple[str, list]:
     payload = payload.copy() if payload else {}
     payload.update(kwargs)
 
     action      = (payload.get('action', '') or '').lower()
     source      = payload.get('source')
     dbms        = dbms or payload.get('dbms') or 'Pg'
-    raw_source  = raw_source or payload.get('raw_source', False)
+    raw_source  = raw_source
     scope       = scope or payload.get('scope')
     placeholder = placeholder or payload.get('placeholder')
 
@@ -954,15 +1071,21 @@ def filtersql(payload=None, dbms=None, scope=None, raw_source=False, placeholder
     if action not in ['select', 'insert', 'update', 'delete']:
         raise ValidationError(f"Invalid action '{action}'. Please specify: select, insert, update, delete.")
 
+    for key in ['raw_source', 'allow_raw_source', 'allow_raw_fields']:
+        if key in payload:
+            raise ValidationError(f"'{key}' is a server-side configuration flag...")    
+
     ds = Datasource(
         source=source,
         dbms=dbms,
-        raw_source=raw_source, 
+        raw_source=raw_source,
+        allow_raw_source=allow_raw_source,
+        allow_raw_fields=allow_raw_fields,
         order=payload.get('order'),
         limit=payload.get('limit'),
         scope=scope,
         direction=payload.get('direction'),
-        placeholder=placeholder
+        placeholder=placeholder,
     )
 
     if action == 'select':

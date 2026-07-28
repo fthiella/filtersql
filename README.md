@@ -252,9 +252,13 @@ Plain strings also work:
 columns = ['id', 'first_name', 'last_name']
 ```
 
-Raw expressions with `raw=True`:
+Raw expressions with `raw=True`, but since this bypasses quoting/escaping entirely
+never pass untrusted input as field when set, and remember to set `allow_raw_filelds=True`
+on the corresponding Datasource:
 
 ```python
+ds = filtersql.Datasource(source='users', dbms='Pg', allow_raw_fields=True)
+
 columns = [
     {'field': 'COUNT(*) as total', 'raw': True},
     {'field': 'MAX(age) as max_age', 'raw': True},
@@ -262,6 +266,42 @@ columns = [
 ```
 
 Note: `raw=True` bypasses quoting/escaping entirely — never pass untrusted input as field when set.
+---
+
+## Raw source (`raw_source`)
+
+By default, `source` is always treated as an identifier and quoted
+accordingly. If you need to pass a subquery instead of a plain table name
+(e.g. `"(SELECT * FROM users WHERE active = true) AS active_users"`), set
+`raw_source=True` — this tells filtersql to use the `source` string
+directly in the SQL, unquoted.
+
+Because `raw_source=True` disables quoting entirely, it also requires an
+explicit `allow_raw_source=True` on the `Datasource` — this two-flag
+requirement exists specifically so this feature can't be turned on by
+accident or by a value that came from user input.
+
+```python
+ds = filtersql.Datasource(
+    source="(SELECT * FROM users WHERE active = true) AS active_users",
+    raw_source=True,
+    allow_raw_source=True,
+    dbms='Pg'
+)
+```
+
+**Note:** `raw_source=True` bypasses quoting entirely — only use it with
+trusted, hardcoded values. Never build `source` from user input:
+
+```python
+# UNSAFE — never do this
+ds = filtersql.Datasource(
+    source=request.GET.get('table'),
+    raw_source=True,
+    allow_raw_source=True,
+    dbms='Pg'
+)
+```
 
 ---
 
@@ -365,7 +405,7 @@ Supported actions: `select`, `insert`, `update`, `delete`.
 
 ## debug()
 
-Replaces placeholders with actual values for logging. Never use the output as real SQL.
+Replaces placeholders with actual values for logging. For security reasons, never use the output as real SQL.
 
 ```python
 query, values = ds.select(columns=columns, filters=filters)
@@ -378,6 +418,8 @@ print(ds.debug(query, values))
 # where
 #   ("first_name" ilike chr(37) || 'John' || chr(37) escape '\')
 ```
+
+> Disabled by default — set FILTERSQL_DEBUG=1 in your environment to enable, since this should never run in production
 
 ---
 
@@ -488,6 +530,15 @@ filters = [f.model_dump() for f in parsed.sql_filters]
 
 ds = filtersql.Datasource(source='documents', dbms='Pg', placeholder='%s')
 where_clause, values = ds.where(filters=filters)
+```
+
+### Empty list handling (`in` / `notin`)
+
+If a frontend or LLM passes an empty array as a filter value (e.g. unselected checkboxes), `filtersql` handles it gracefully without breaking SQL syntax:
+
+```python
+{'field': 'category_id', 'operator': 'in',    'value': []} # → 1 = 0
+{'field': 'category_id', 'operator': 'notin', 'value': []} # → 1 = 1
 ```
 
 ### JSONB and value_type (PostgreSQL)

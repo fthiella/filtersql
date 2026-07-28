@@ -2,6 +2,54 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.3] - 2026-07-28
+### Security
+- `raw_source` and `raw` (on columns/filters) now require explicit opt-in.
+  Previously, setting `raw_source=True` or `raw=True` worked unconditionally,
+  bypassing all quoting/escaping. This is now gated behind two new
+  `Datasource` constructor flags, `allow_raw_source` and `allow_raw_fields`
+  (both default `False`) - the feature must be explicitly enabled server-side,
+  so it can't be turned on accidentally or via client-controlled input.
+  This is a breaking change: existing code using `raw_source=True` or
+  `raw=True` must now also pass `allow_raw_source=True` / `allow_raw_fields=True`.
+- Closed a related gap in the `filtersql()` convenience function: `raw_source`,
+  `allow_raw_source`, and `allow_raw_fields` can no longer be set via the
+  JSON payload itself - only as server-side keyword arguments. Previously
+  `raw_source` could be flipped on by an untrusted payload.
+- `debug()` is now disabled unless the `FILTERSQL_DEBUG=1` environment
+  variable is set, to prevent accidental use in production. This is also
+  a breaking change for any code calling `debug()` without that env var set.
+- Upgrade recommended for all users of 1.2.x.
+
+### Fixed
+- Keyset pagination (`cursor`) now respects each column's own sort direction.
+  Previously the `next`/`prev` comparison operator was applied uniformly to
+  every cursor column regardless of its `asc`/`desc` setting in `order`,
+  silently producing wrong results (missing/duplicate rows, no error) for
+  any multi-column sort mixing directions.
+- Fixed a related bug where an `order` passed directly to `select()` (to
+  override the `Datasource`'s constructor-time order) was ignored by the
+  cursor logic, causing the generated `WHERE` and `ORDER BY` clauses to
+  disagree.
+- Fixed a bug where using `cursor`/`direction` with no `order` configured
+  anywhere could silently drop the cursor condition, returning an
+  unfiltered query instead of the paginated slice.
+- Added regression tests for all of the above.
+- Empty List Handling (`in` / `notin`): Passing an empty array (`value: []`) now compiles safely to `1 = 0` (for `in`) or `1 = 1` (for `notin`) instead of generating syntactically invalid SQL (`IN ()`).
+- Quote Stripping in `_safe_sql_literal`: Removed `.strip("\"'")` so JSON keys or literals starting/ending with literal quotes are not unintentionally modified during string escaping.
+
+### Added
+- **JSONB `value_type` Whitelist & Validation**: Expanded Postgres JSONB cast support to include `integer`, `bigint`, `real`, `double precision`, `timestamp`, `timestamptz`, `time`, `boolean`, and `uuid` alongside `numeric` and `date`. Passing an unrecognized `value_type` now raises a clear `ValidationError`.
+
+### Documentation
+- Updated `README.md` and `SPECS.md` to document the empty list (`1 = 0` / `1 = 1`) evaluation semantics.
+- Updated `SPECS.md` JSON Schema with the expanded `value_type` enum.
+- Documented `raw_source` / `allow_raw_source` in the README (previously
+  undocumented), including a safe/unsafe usage example.
+- Updated the `raw=True` column/`having` examples to include the required
+  `allow_raw_fields=True` flag.
+- Noted the `FILTERSQL_DEBUG=1` requirement for `debug()`.
+
 ## [1.2.2] - 2026-07-27
 ### Security
 - Fixed a SQL injection vulnerability affecting the `fts_language`
