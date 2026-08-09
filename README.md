@@ -663,6 +663,10 @@ ds = filtersql.Datasource(..., fts_language='italian')
 | MySQL | `'mysql'` | `%s` |
 | Oracle | `'Oracle'` | `?` |
 
+`dbms` is case-insensitive - `'pg'`, `'PG'`, `'Pg'` are all equivalent.
+Unrecognized names (e.g. `'postgres'`) still raise a `ConfigurationError`
+listing the valid names above.
+
 Override with any placeholder your driver expects:
 
 ```python

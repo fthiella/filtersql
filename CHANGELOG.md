@@ -2,6 +2,58 @@
 
 All notable changes to this project will be documented in this file.
 
+# [1.2.4] - 2026-08-09
+### Added
+- `dbms` is now case-insensitive: `'pg'`, `'PG'`, `'Pg'` (and equivalents
+  for `SQLite`, `mysql`, `DuckDB`, `Oracle`) all resolve to the same
+  canonical dialect. Only casing is normalized - unrecognized names or
+  aliases (e.g. `'postgres'`) still raise `ConfigurationError` exactly as
+  before, listing the valid canonical names. Internal `DBMS_MAP` keys and
+  every `self.dbms == 'Pg'`-style comparison in the codebase are
+  unchanged; normalization happens once, in the constructor.
+
+### Fixed
+- **MySQL: invalid `ESCAPE` clause syntax on wildcard operators.** Any
+  `contains`/`starts_with`/`ends_with` (and their `not_`/`i`/`not_i`
+  variants) on `dbms='mysql'` generated `escape '\'` - a single backslash,
+  which MySQL's default string-literal escaping rules treat as an escaped
+  quote, leaving the literal unterminated and the query unparsable.
+  `_safe_sql_literal` is now dialect-aware and doubles embedded backslashes
+  for MySQL (Pg/SQLite/DuckDB use standard-conforming strings and are
+  unaffected); `_wildcard_escape_clause` routes through it instead of
+  interpolating the raw escape character.
+- **Scalar operators (`=`, `!=`, `>`, `contains`, `regexp`, `fts`, etc.)
+  silently accepted list/tuple/dict values.** A filter such as
+  `{'operator': '=', 'value': []}` produced a syntactically valid query
+  with a list bound as a scalar parameter, which then failed at the driver
+  with an opaque binding error instead of a clear `ValidationError` at
+  build time. These operators now reject non-scalar values immediately.
+- **`in`/`notin` with a falsy scalar value (`''`, `0`, `False`) produced a
+  placeholder/value-count mismatch.** The WHERE-clause builder decided
+  "empty" by checking truthiness of the raw value (`not ''` → treated as
+  empty, 0 placeholders), while the values-list builder checked the
+  already-listified value (`['']` → not empty, 1 value) - the two
+  disagreed, producing `Incorrect number of bindings supplied` at
+  execution time. Both now normalize to a list before deciding emptiness,
+  so they always agree.
+- **`_quote()` silently produced an empty identifier for input consisting
+  only of dots** (e.g. `field: '.'`), splicing nothing into the SQL text
+  instead of raising. Now raises `InvalidIdentifierError`.
+- Added regression tests for all of the above (property-based, via
+  `hypothesis`, plus real-execution tests against SQLite and AST validation
+  against all 5 supported dialects via `sqlglot`).
+
+### Notes
+- No breaking changes to documented behavior - all four fixes tighten
+  validation or correct dialect-specific SQL generation for inputs that
+  either previously produced wrong/invalid SQL or crashed with a
+  driver-level error. Any code relying on those specific broken behaviors
+  (e.g. catching `sqlite3.ProgrammingError` from a filtersql-built query)
+  should now expect a `ValidationError`/`InvalidIdentifierError` instead.
+- Upgrade recommended for all MySQL users, and for anyone accepting
+  filter payloads from untrusted or loosely-validated sources (frontends,
+  LLM output).
+
 ## [1.2.3] - 2026-07-28
 ### Security
 - `raw_source` and `raw` (on columns/filters) now require explicit opt-in.

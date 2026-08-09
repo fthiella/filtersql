@@ -166,6 +166,13 @@ DBMS_MAP = {
         },
         "limit": 'limit {start}, {length}',
         "like_escape": {"style": "backslash", "escape_char": "\\", "wildcards": ["%", "_"]},
+        # MySQL treats backslash as an in-string escape character by default
+        # (NO_BACKSLASH_ESCAPES not assumed), unlike Pg/SQLite/DuckDB, which
+        # use standard-conforming strings where backslash has no special
+        # meaning inside '...' literals. Any raw value spliced into a MySQL
+        # string literal - not passed as a bound parameter - must have its
+        # backslashes doubled too, or it can leave the literal unterminated.
+        "literal_backslash_escapes": True,
     },
     'Oracle': {
         "placeholder":         '?',
@@ -207,6 +214,14 @@ DBMS_MAP = {
         "like_escape": {"style": "backslash", "escape_char": "\\", "wildcards": ["%", "_"]},
     }
 }
+
+# Case-insensitive lookup: normalizes any casing of a dbms name (e.g.
+# 'PG', 'pg', 'Pg') to the canonical key used everywhere else in this
+# file. DBMS_MAP's own keys stay exactly as they are ('Pg', 'SQLite',
+# 'mysql', ...) so every existing `self.dbms == 'Pg'` / `self.dbms ==
+# 'SQLite'` comparison throughout the class keeps working unchanged -
+# only the constructor needs to know about this table.
+_DBMS_CASE_INSENSITIVE_LOOKUP = {k.lower(): k for k in DBMS_MAP}
 
 DEFAULT_PAGE_LENGTH = 100
 
@@ -269,6 +284,13 @@ class Datasource:
         """
         Datasource initialization
         """
+        # Case-insensitive dbms: 'pg', 'PG', 'Pg' all resolve to the same
+        # canonical key. Only casing is normalized here - unrecognized
+        # names (typos, aliases like 'postgres') are left as-is and will
+        # correctly fail the DBMS_MAP membership check right below, with
+        # the original value quoted back in the error message.
+        if isinstance(dbms, str):
+            dbms = _DBMS_CASE_INSENSITIVE_LOOKUP.get(dbms.strip().lower(), dbms)
         self.dbms             = dbms
         self.allow_raw_source = allow_raw_source
         self.allow_raw_fields = allow_raw_fields
@@ -749,6 +771,17 @@ class Datasource:
         elif operator == 'between':
             return sql_frag, list(value)
         else:
+            # Every operator that reaches this branch (=, !=, >, contains,
+            # regexp, fts, etc.) binds exactly one scalar parameter. Only
+            # 'in'/'notin'/'between' (handled above) accept a list. Without
+            # this check, a list/tuple/dict slips through as-is and fails
+            # later at the driver with an opaque binding error instead of a
+            # clean ValidationError at the point the bad input was given.
+            if isinstance(value, (list, tuple, dict)):
+                raise ValidationError(
+                    f"Operator '{operator}' expects a single scalar value, "
+                    f"got {type(value).__name__}: {value!r}"
+                )
             if operator in self._WILDCARD_OPS and value is not None:
                 escaped_value = self._escape_wildcard_value(value, operator)
             else:
@@ -814,15 +847,23 @@ class Datasource:
             param_expr = self.placeholder
 
         if searchcriteria in ['in', 'notin']:
+            # Normalize to a list FIRST, then decide "empty", so this
+            # agrees exactly with the value-list built in
+            # _build_condition_sql. Deciding emptiness on the raw
+            # pre-wrapped value instead (the old order) meant any falsy
+            # scalar - '', 0, False - short-circuited to the 0-placeholder
+            # "1=0"/"1=1" fragment here, while the caller still emitted 1
+            # bound value for it: a placeholder/value-count mismatch that
+            # only surfaces as an opaque driver-level binding error.
+            if not isinstance(search_value, (list, tuple)):
+                search_value = [search_value] if search_value is not None else []
+
             if searchcriteria == 'in':
                 if not search_value:
                     return "1 = 0"
             elif searchcriteria == 'notin':
                 if not search_value:
                     return "1 = 1"
-
-            if not isinstance(search_value, (list, tuple)):
-                search_value = [search_value] if search_value is not None else []
 
             placeholders_str = ", ".join([param_expr] * len(search_value))
             return raw_statement.format(col=col_expr, params=placeholders_str)
@@ -909,10 +950,13 @@ class Datasource:
         cfg = self._wildcard_escape_config(operator)
         if not cfg or cfg['style'] != 'backslash':
             return ''
-        return f" escape '{cfg['escape_char']}'"
+        # Route through _safe_sql_literal rather than interpolating
+        # cfg['escape_char'] directly - it needs the same dialect-aware
+        # backslash-doubling as any other literal spliced into MySQL SQL
+        # text (see _safe_sql_literal docstring).
+        return f" escape '{self._safe_sql_literal(cfg['escape_char'])}'"
 
-    @staticmethod
-    def _safe_sql_literal(raw_value: str) -> str:
+    def _safe_sql_literal(self, raw_value: str) -> str:
         """
         Sanitizes a string before it is embedded directly inside a
         single-quoted SQL string literal (i.e. NOT as a bound parameter).
@@ -927,6 +971,13 @@ class Datasource:
         "amount' or '1'='1" would break out of the surrounding '...'
         literal and inject arbitrary SQL.
 
+        On dialects where backslash is itself a string-literal escape
+        character (MySQL, unless NO_BACKSLASH_ESCAPES is set), embedded
+        backslashes are doubled too - otherwise a value ending in a
+        backslash escapes the closing quote instead of terminating the
+        literal, leaving the rest of the query concatenated into the
+        string (a syntax error at best, a smuggling vector at worst).
+
         Deliberately does NOT trim whitespace or strip quote characters -
         either could be meaningful, real content (e.g. a JSONB key that
         legitimately has a trailing space, common in data imported from
@@ -935,7 +986,10 @@ class Datasource:
         '->>' operator is trimmed at the parsing site instead, before
         this function ever sees the value.
         """
-        return str(raw_value).replace("'", "''")
+        value = str(raw_value)
+        if DBMS_MAP[self.dbms].get('literal_backslash_escapes'):
+            value = value.replace('\\', '\\\\')
+        return value.replace("'", "''")
 
     # Kept as an alias: _safe_jsonb_key was the original, narrower name for
     # this helper before it was generalized to cover fts_language too.
@@ -978,6 +1032,12 @@ class Datasource:
         # Parse dot notation (schema.table)
         if '.' in name:
             parts = [p.strip() for p in name.split('.') if p.strip()]
+            # If every segment was blank ('.', ' . ', '..', ...), filtering
+            # empties leaves parts == [], which .join()s into '' below with
+            # no error - an empty identifier silently spliced into the SQL
+            # text. Catch that here rather than letting it through quiet.
+            if not parts:
+                raise InvalidIdentifierError(f"Identifier has no valid segments: {name!r}")
             if len(parts) > 2:
                 raise InvalidIdentifierError(f"Too many parts in identifier: {name}")
             return ".".join(self._quote(p, quote) for p in parts)
