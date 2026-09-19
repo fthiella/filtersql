@@ -2,7 +2,59 @@
 
 All notable changes to this project will be documented in this file.
 
-# [1.2.4] - 2026-08-09
+## [1.2.5] - 2026-09-19
+
+### Fixed
+- **`debug()` substituted values that contain the placeholder character.**
+  With `placeholder='?'`, a value such as `"what?"` would cause the next
+  iteration of the substitution loop to replace the `?` *inside the
+  already-formatted value* instead of the next real placeholder. `debug()`
+  now splits the query on the placeholder once, recomposes with the
+  formatted values, and returns the query unchanged if the placeholder
+  count doesn't match `len(values)`.
+- **`select()` had a dead validation branch for non-list `filters`.**
+  `filters = list(filters or [])` always produced a list, so the
+  subsequent `isinstance(filters, list)` check could never fail; a dict
+  passed as `filters` would be silently converted to its keys and fail
+  later with an opaque error. The type check now runs *before* the
+  conversion.
+- **`filtersql()` blacklist now also covers `placeholder`, `dbms`, and
+  `scope`.** The 1.2.3 release closed the payload-based escalation for
+  `raw_source` / `allow_raw_source` / `allow_raw_fields`, but these three
+  server-side parameters could still be set from an untrusted payload. A
+  payload such as `{"placeholder": "? or 1=1"}` could turn a parameterized
+  query into a non-parameterized one. All six keys are now rejected with a
+  clear `ValidationError` before they can reach the `Datasource`.
+
+### Documentation
+- Aligned `SPECS.md` with the implementation:
+  - `value_type` enum now matches `_PG_ALLOWED_CAST_TYPES` (added `real`,
+    `double precision`, `time`; removed `text`, which was a no-op cast).
+  - `direction` without `cursor` is now documented as legal (it only
+    inverts `ORDER BY`); the previous "Invariant Rules" contradicted the
+    implementation.
+  - `raw` is now present in the `filterElement` schema.
+  - New §2.6 documents the server-side configuration surface (`dbms`,
+    `placeholder`, `scope`, `fts_language`, `allow_raw_fields`,
+    `allow_raw_source`/`raw_source`) and states that none of it may be
+    supplied via the payload.
+- `README.md`: fixed the `allow_raw_fields` typo, removed a duplicated
+  "Lightweight" bullet, corrected the multi-column cursor example (the
+  `order` list must contain the cursor fields), replaced the misleading
+  `placeholder=':val'` example with a real one, and aligned the Pydantic
+  and Gemini schemas to scalar-only operators (matching the caveat already
+  present for the Gemini example).
+
+### Notes
+- No breaking changes to documented behavior. All three code fixes tighten
+  validation or correct output for inputs that previously produced
+  misleading results (debug output) or crashed with a driver-level error
+  (placeholder injection via payload).
+- Upgrade recommended for anyone using the `filtersql()` convenience
+  function with input that isn't fully server-controlled.
+
+## [1.2.4] - 2026-08-09
+
 ### Added
 - `dbms` is now case-insensitive: `'pg'`, `'PG'`, `'Pg'` (and equivalents
   for `SQLite`, `mysql`, `DuckDB`, `Oracle`) all resolve to the same

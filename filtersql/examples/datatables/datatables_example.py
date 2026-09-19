@@ -2,7 +2,7 @@
 """
 DataTables + filtersql + parseDatatableArgs
 ============================================
-Usa il tuo utils.py per parsare automaticamente i parametri!
+Uses your utils.py to parse DataTables parameters automatically.
 """
 
 from flask import Flask, request, jsonify, render_template
@@ -14,7 +14,7 @@ app = Flask(__name__)
 DB_FILE = 'demo.db'
 
 # ============================================================================
-# COLONNE DEL DATASET
+# DATASET COLUMNS
 # ============================================================================
 
 COLUMNS = [
@@ -33,7 +33,7 @@ def get_db():
     return conn
 
 # ============================================================================
-# ENDPOINT DATATABLES - SUPER SEMPLICE!
+# DATATABLES ENDPOINT
 # ============================================================================
 
 @app.route('/')
@@ -42,18 +42,18 @@ def index():
 
 @app.route('/api/users')
 def api_users():
-    # 1. Parsa automaticamente i parametri DataTables!
+    # 1. Automatically parse DataTables parameters
     dt = parseDatatableArgs(request.args)
     
-    # 2. Estrai i valori
+    # 2. Extract values
     draw = int(dt.get('draw', 1))
     start = int(dt.get('start', 0))
     length = int(dt.get('length', 10))
     
-    # 3. Costruisci i filtri da dt
+    # 3. Build filters from DataTables payload
     filters = []
     
-    # Filtri per colonna (search per colonna)
+    # Per-column search filters
     columns = dt.get('columns', {})
     for idx, col_data in columns.items():
         search_value = col_data.get('search', {}).get('value', '').strip()
@@ -65,7 +65,7 @@ def api_users():
                 'value': search_value
             })
     
-    # Filtro globale
+    # Global search filter
     global_search = dt.get('search', {}).get('value', '').strip()
     if global_search:
         filters.append({
@@ -78,7 +78,7 @@ def api_users():
             ]
         })
     
-    # 4. Costruisci ORDER
+    # 4. Build ORDER
     order = []
     order_data = dt.get('order', {})
     for idx, ord_info in order_data.items():
@@ -92,22 +92,22 @@ def api_users():
     if not order:
         order = [{'field': 'id', 'order': 'asc'}]
     
-    # 5. Conta totale
+    # 5. Count all
     q_total, p_total = filtersql({
         'action': 'select',
         'source': 'users',
         'columns': [{'field': 'COUNT(*) as total', 'raw': True}],
-    }, dbms='SQLite', placeholder='?')
+    }, dbms='SQLite', placeholder='?', allow_raw_fields=True)
     
-    # 6. Conta filtrati
+    # 6. Count filtered
     q_filtered, p_filtered = filtersql({
         'action': 'select',
         'source': 'users',
         'columns': [{'field': 'COUNT(*) as total', 'raw': True}],
         'filters': filters,
-    }, dbms='SQLite', placeholder='?')
+    }, dbms='SQLite', placeholder='?', allow_raw_fields=True)
     
-    # 7. Dati
+    # 7. Fetch page data
     q_data, p_data = filtersql({
         'action': 'select',
         'source': 'users',
@@ -117,8 +117,9 @@ def api_users():
         'limit': {'start': start, 'length': length},
     }, dbms='SQLite', placeholder='?')
     
-    # 8. Esegui
-    with get_db() as conn:
+    # 8. Execute
+    conn = get_db()
+    try:
         cur = conn.cursor()
         
         cur.execute(q_total, p_total)
@@ -130,15 +131,17 @@ def api_users():
         cur.execute(q_data, p_data)
         data = [dict(row) for row in cur.fetchall()]
     
-    return jsonify({
-        'draw': draw,
-        'recordsTotal': records_total,
-        'recordsFiltered': records_filtered,
-        'data': data,
-    })
+        return jsonify({
+            'draw': draw,
+            'recordsTotal': records_total,
+            'recordsFiltered': records_filtered,
+            'data': data,
+        })
+    finally:
+        conn.close()
 
 # ============================================================================
-# AVVIA
+# RUN
 # ============================================================================
 
 if __name__ == '__main__':

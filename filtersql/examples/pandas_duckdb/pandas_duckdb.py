@@ -24,7 +24,7 @@ conn.register('users', df)
 
 def query_to_df(payload, **kwargs):
     """Helper: filtersql → DuckDB → DataFrame"""
-    query, params = filtersql(payload, dbms='DuckDB', **kwargs)
+    query, params = filtersql(payload, dbms='DuckDB', allow_raw_fields=True, **kwargs)
     print(query)
     print(params)
     return conn.execute(query, params).fetchdf()
@@ -69,7 +69,7 @@ result = query_to_df({
 print(result)
 print("\n" + "-"*30 + "\n")
 
-print("4. AI generated filters (simulation):\n")
+print("4. Filters shaped like LLM output (see gemini_integration.py):\n")
 ai_filters = [
     {'field': 'first_name', 'operator': 'icontains', 'value': 'john'},
     {'field': 'age', 'operator': '>=', 'value': 30}

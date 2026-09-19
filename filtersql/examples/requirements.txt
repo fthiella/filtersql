@@ -1,0 +1,5 @@
+flask
+google-genai
+python-dotenv
+pandas
+duckdb

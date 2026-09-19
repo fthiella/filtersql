@@ -16,7 +16,7 @@ LAST_NAMES = [
     'Taylor', 'Williams', 'Davis', 'Miller', 'Wilson', 'Moore', 'Anderson', 'Thomas', 'Jackson', 'White',
     'Esposito', 'Ricci', 'Romano', 'Colombo', 'Gallo', 'Conti', 'Costa', 'Giordano', 'Rizzo', 'Lombardi',
     'Clark', 'Lewis', 'Walker', 'Hall', 'Allen', 'Young', 'King', 'Wright', 'Hill', 'Scott',
-    'Green', 'Adams', 'Baker', 'Gonzalez', 'Carter', 'Mitchell', 'Perez', 'Roberts', 'Turner', 'Phillips'
+    'Green', 'Adams', 'Hughes', 'Gonzalez', 'Carter', 'Mitchell', 'Perez', 'Roberts', 'Turner', 'Phillips'
 ]
 
 ROLES = ['admin', 'editor', 'viewer']
@@ -32,8 +32,9 @@ PROVIDERS = [
 ]
 
 conn = sqlite3.connect('demo.db')
+conn.execute('DROP TABLE IF EXISTS users')
 conn.execute('''
-    CREATE TABLE IF NOT EXISTS users (
+    CREATE TABLE users (
         id         INTEGER PRIMARY KEY AUTOINCREMENT,
         first_name TEXT NOT NULL,
         last_name  TEXT NOT NULL,
@@ -53,12 +54,11 @@ for i in range(500):
     query, values = ds.insert(values={
         'first_name': first,
         'last_name':  last,
-        'email':      f'{first.lower()}.{last.lower()}{i}@example.com',
+        'email':      f'{first.lower()}.{last.lower()}{i}@{random.choice(PROVIDERS)}',
         'age':        random.randint(20, 65),
         'status':     random.choice(STATUSES),
         'role':       random.choice(ROLES),
     })
-    print(ds.debug(query, values))
     conn.execute(query, values)
 
 conn.commit()

@@ -325,9 +325,11 @@ class Datasource:
         """
         Build a SELECT query. Pass columns, filters, order, limit explicitly.
         """
-        filters = list(filters or [])
-        if not isinstance(filters, list):
-            raise ValidationError("Expected list as 'filters'.")
+        if filters is not None and not isinstance(filters, list):
+            raise ValidationError(
+                f"Expected list for 'filters', got {type(filters).__name__}: {filters!r}"
+            )
+        filters = list(filters) if filters else []
 
         columns = columns or []
         if not isinstance(columns, list):
@@ -554,19 +556,22 @@ class Datasource:
                 "Never use this in production."
             )
 
-        debug_query = query
-        for val in values:
+        parts = query.split(self.placeholder)
+        if len(parts) - 1 != len(values):
+            return query
+
+        def _format(val):
             if isinstance(val, str):
-                escaped = val.replace("'", "''")
-                formatted_val = f"'{escaped}'"
-            elif val is None:
-                formatted_val = "null"
-            else:
-                formatted_val = str(val)
+                return "'" + val.replace("'", "''") + "'"
+            if val is None:
+                return "null"
+            return str(val)
 
-            debug_query = debug_query.replace(self.placeholder, formatted_val, 1)
-
-        return debug_query
+        out = [parts[0]]
+        for val, tail in zip(values, parts[1:]):
+            out.append(_format(val))
+            out.append(tail)
+        return ''.join(out)
 
     def where(self, *, filters: list = None, direction: str = None, cursor: dict = None, order: list = None) -> tuple[str, list]:
         """Build a WHERE clause from filters and cursor. Returns (clause, values)."""
@@ -1121,19 +1126,18 @@ def filtersql(payload=None, dbms=None, scope=None, raw_source=False, allow_raw_s
 
     action      = (payload.get('action', '') or '').lower()
     source      = payload.get('source')
-    dbms        = dbms or payload.get('dbms') or 'Pg'
+    dbms        = dbms or 'Pg'
     raw_source  = raw_source
-    scope       = scope or payload.get('scope')
-    placeholder = placeholder or payload.get('placeholder')
 
     if not source:
         raise ValidationError("Need to specify 'source'.")
     if action not in ['select', 'insert', 'update', 'delete']:
         raise ValidationError(f"Invalid action '{action}'. Please specify: select, insert, update, delete.")
 
-    for key in ['raw_source', 'allow_raw_source', 'allow_raw_fields']:
+    for key in ['raw_source', 'allow_raw_source', 'allow_raw_fields',
+                'placeholder', 'dbms', 'scope']:
         if key in payload:
-            raise ValidationError(f"'{key}' is a server-side configuration flag...")    
+            raise ValidationError(f"'{key}' is a server-side configuration flag and cannot be set from the payload.")
 
     ds = Datasource(
         source=source,

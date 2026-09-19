@@ -31,7 +31,6 @@ Supports PostgreSQL, SQLite, MySQL, DuckDB and Oracle.
 - **Python-native & Lightweight** - No ORM required. Works seamlessly with your favorite Python database driver
 - **Secure by default** - Fully parameterized queries, protected against SQL injection
 - **Multi-database support** - PostgreSQL, SQLite, MySQL, DuckDB and Oracle
-- **Lightweight** - No ORM required. Works with any database driver (psycopg2, sqlite3, mysql-connector, cx_Oracle, etc.)
 - **Language-agnostic** - Clean JSON protocol, perfect for REST APIs and frontend applications
 - **High-performance pagination** - Keyset (cursor-based) pagination, avoiding slow `OFFSET` queries
 - **AI/LLM friendly** - Designed for structured output from large language models
@@ -230,6 +229,8 @@ query, values = ds.insert(values={'title': 'New doc'})
 # → INSERT INTO "documents" ("title", "tenant_id") VALUES (%s, %s)
 ```
 
+Note: in `insert()`, scope values take precedence over values in case of collision. This prevents a client from overriding the tenant boundary by passing a colliding column.
+
 ---
 
 ## Columns
@@ -253,7 +254,7 @@ columns = ['id', 'first_name', 'last_name']
 ```
 
 Raw expressions with `raw=True`, but since this bypasses quoting/escaping entirely
-never pass untrusted input as field when set, and remember to set `allow_raw_filelds=True`
+never pass untrusted input as field when set, and remember to set `allow_raw_fields=True`
 on the corresponding Datasource:
 
 ```python
@@ -478,7 +479,7 @@ SCHEMA = {
                 "type": "OBJECT",
                 "properties": {
                     "field":    {"type": "STRING"},
-                    "operator": {"type": "STRING", "enum": ["=", "!=", ">", ">=", "<", "<=", "icontains", "in"]},
+                    "operator": {"type": "STRING", "enum": ["=", "!=", ">", ">=", "<", "<=", "icontains"]},
                     "value":    {"type": "STRING"}
                 },
                 "required": ["field", "operator", "value"]
@@ -489,7 +490,7 @@ SCHEMA = {
 }
 
 response = client.models.generate_content(
-    model='gemini-flash',
+    model='gemini-3.1-flash-lite',
     contents=user_question,
     config=genai.types.GenerateContentConfig(
         system_instruction="Convert user questions into SQL filter payloads.",
@@ -516,7 +517,7 @@ class SQLFilter(BaseModel):
         'contains', 'not_contains', 'icontains', 'not_icontains',
         'starts_with', 'not_starts_with', 'istarts_with', 'not_istarts_with',
         'ends_with', 'not_ends_with', 'iends_with', 'not_iends_with',
-        'between', 'in', 'notin', 'regexp', 'iregexp', 'not_regexp', 'not_iregexp',
+        'regexp', 'iregexp', 'not_regexp', 'not_iregexp',
         'null', 'notnull', 'fts', 'fts_query', 'reverse_in'
     ]
     value: str
@@ -597,6 +598,15 @@ query, values = ds.select(
 Multi-column cursors work too:
 
 ```python
+ds = filtersql.Datasource(
+    source = 'documents',
+    dbms   = 'Pg',
+    order  = [
+        {'field': 'last_name',  'order': 'asc'},
+        {'field': 'first_name', 'order': 'asc'},
+    ],
+)
+
 query, values = ds.select(
     columns   = columns,
     cursor    = {'first_name': last_first, 'last_name': last_last},
@@ -671,7 +681,7 @@ Override with any placeholder your driver expects:
 
 ```python
 ds = filtersql.Datasource(..., placeholder='%s')
-ds = filtersql.Datasource(..., placeholder=':val')
+ds = filtersql.Datasource(..., placeholder='$1')
 ```
 
 ---

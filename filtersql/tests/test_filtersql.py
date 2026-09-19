@@ -80,7 +80,6 @@ class TestBasicSelect(unittest.TestCase):
         q, _ = get_query(ds, columns=[{'field': 'u.first_name'}])
         self.assertIn('"u"."first_name"', q)
 
-
 # ---------------------------------------------------------------------------
 # 2. Filter operators — WHERE clause generation
 # ---------------------------------------------------------------------------
@@ -890,6 +889,23 @@ class TestDebug(unittest.TestCase):
         self.assertIn('1', debug)
         self.assertNotIn('?', debug)
 
+    def test_debug_placeholder_inside_value(self):
+        """A value containing the placeholder itself must not confuse
+        the substitution logic."""
+        ds = make_ds()
+        q, v = ds.where(filters=[{'field': 'a', 'operator': '=', 'value': '?'}])
+        debug = ds.debug(q, v)
+        self.assertIn("'?'", debug)
+        self.assertNotIn('%s', debug)
+
+    def test_debug_count_mismatch_returns_query_unchanged(self):
+        """If the placeholder count doesn't match len(values), return
+        the query as-is rather than produce misleading output."""
+        ds = make_ds()
+        result = ds.debug('"x" = %s and "y" = %s', [1])
+        self.assertEqual(result, '"x" = %s and "y" = %s')
+
+
 
 # ---------------------------------------------------------------------------
 # 14. _invert_order — deep tests
@@ -1215,6 +1231,16 @@ class TestFiltersqlFunction(unittest.TestCase):
             dbms='Pg',
         )
         self.assertIn('select', q.lower())
+
+    def test_select_filters_must_be_list(self):
+        ds = make_ds()
+        with self.assertRaises(ValidationError):
+            ds.select(filters={'field': 'x', 'operator': '=', 'value': 1})
+
+    def test_select_rejects_non_list_filters(self):
+        ds = make_ds()
+        with self.assertRaises(ValidationError):
+            ds.select(filters={'field': 'x', 'operator': '=', 'value': 1})
 
 # ---------------------------------------------------------------------------
 # 18. Cursor Pagination (type='move', seek/next/prev)

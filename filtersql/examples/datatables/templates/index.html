@@ -4,7 +4,6 @@
     <meta charset="UTF-8">
     <title>filtersql - DataTables</title>
     <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/jquery.dataTables.min.css">
-    <link rel="stylesheet" href="https://cdn.datatables.net/1.13.6/css/dataTables.bootstrap5.min.css">
     <script src="https://code.jquery.com/jquery-3.7.1.min.js"></script>
     <script src="https://cdn.datatables.net/1.13.6/js/jquery.dataTables.min.js"></script>
     <style>
@@ -171,6 +170,7 @@
             transition: background 0.2s;
         }
         .clear-filters-btn:hover { background: #c62828; }
+        .text-center { text-align: center; }
     </style>
 </head>
 <body>
@@ -190,6 +190,7 @@
                 <th>Email</th>
                 <th>Age</th>
                 <th>Status</th>
+                <th>Role</th>
             </tr>
         </thead>
     </table>
@@ -214,20 +215,20 @@ $(document).ready(function() {
             }
         },
         columns: [
-            { data: 'id', className: 'text-center' },
-            { data: 'first_name', className: 'text-left' },
-            { data: 'last_name', className: 'text-left' },
-            { data: 'email', className: 'text-left' },
-            { data: 'age', className: 'text-center' },
+            { data: 'id',         render: $.fn.dataTable.render.text() },
+            { data: 'first_name', render: $.fn.dataTable.render.text() },
+            { data: 'last_name',  render: $.fn.dataTable.render.text() },
+            { data: 'email',      render: $.fn.dataTable.render.text() },
+            { data: 'age',        render: $.fn.dataTable.render.text() },
             { 
                 data: 'status',
-                className: 'text-center',
                 render: function(data) {
                     return data === 'active' 
                         ? '<span class="badge active">Active</span>' 
                         : '<span class="badge inactive">Inactive</span>';
                 }
-            }
+            },
+            { data: 'role',       render: $.fn.dataTable.render.text() },
         ],
         pageLength: 10,
         lengthMenu: [[5, 10, 25, 50, 100], [5, 10, 25, 50, 100]],

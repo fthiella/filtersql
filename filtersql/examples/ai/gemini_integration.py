@@ -22,6 +22,14 @@ load_dotenv()
 
 # Initialize the Client
 # Ensure GEMINI_API_KEY is set in your environment variables
+
+if not os.environ.get("GEMINI_API_KEY"):
+    raise RuntimeError(
+        "GEMINI_API_KEY is not set. "
+        "Create a .env file in this folder with "
+        "GEMINI_API_KEY=your_key_here (see .env.example)."
+    )
+
 client = genai.Client(api_key=os.environ.get("GEMINI_API_KEY"))
 
 # ============================================================================
@@ -44,7 +52,7 @@ SCHEMA = {
                     "field": {"type": "STRING"},
                     "operator": {
                         "type": "STRING",
-                        "enum": ["=", "!=", ">", ">=", "<", "<=", "icontains", "in"]
+                        "enum": ["=", "!=", ">", ">=", "<", "<=", "icontains"]
                     },
                     "value": {"type": "STRING"}
                 },
@@ -67,8 +75,15 @@ SCHEMA = {
 }
 
 SYSTEM_INSTRUCTION = """Convert user questions into SQL filter payloads.
-Tables: users (id, first_name, last_name, email, age, status, role)
-Operators: =, !=, >, >=, <, <=, icontains (contains), in, between
+
+Available table: users (id, first_name, last_name, email, age, status, role)
+Available operators: =, !=, >, >=, <, <=, icontains (case-insensitive substring)
+
+Rules:
+- Numeric values must be quoted as strings (age > "30", not age > 30)
+- Use icontains for text searches, = for exact matches
+- Multiple filters are combined with AND
+- Only use fields from the table above
 
 Examples:
 "Active users" -> {"source":"users","filters":[{"field":"status","operator":"=","value":"active"}]}

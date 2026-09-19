@@ -1,6 +1,9 @@
 from flask import Flask, request, jsonify, render_template
 import sqlite3
-from filtersql import filtersql
+from filtersql import filtersql, FilterSQLError
+
+# WARNING: this example has no authentication and no authorization.
+# It is intended for local development only. Do not expose it to a network.
 
 app = Flask(__name__)
 
@@ -52,8 +55,8 @@ def api_gateway(source, action):
                 return jsonify({
                     'status': 'ok',
                     'data': records,
-                    'debug_sql': query,
-                    'debug_params': params
+                    'debug_sql': query,    # unsafe, remove in production
+                    'debug_params': params # unsafe, remove in production
                 })
                 
             else:
@@ -69,17 +72,26 @@ def api_gateway(source, action):
                     'debug_params': params
                 })
                 
+    except FilterSQLError as e:
+        # Validation / Configuration errors - the payload was rejected.
+        # This is the client's fault.
+        return jsonify({'status': 'error', 'message': str(e)}), 400
+
     except sqlite3.IntegrityError as e:
-        # Catch SQLite constraint violations (e.g., UNIQUE, FOREIGN KEY constraints)
+        # Constraint violation (UNIQUE, FK, NOT NULL) - the payload
+        # conflicts with the current database state.
         return jsonify({
-            'status': 'error', 
-            'message': 'Database integrity violation.', 
+            'status': 'error',
+            'message': 'Database integrity violation.',
             'details': str(e)
         }), 400
-        
-    except Exception as e:
-        # Catch filtersql ValidationErrors or general backend exceptions
-        return jsonify({'status': 'error', 'message': str(e)}), 400
+
+    except Exception:
+        # Anything else is a bug or an infrastructure failure on our side.
+        # Log the traceback for debugging, return a generic message to
+        # the client (don't leak internal details).
+        app.logger.exception("unhandled error in /api/%s/%s", source, action)
+        return jsonify({'status': 'error', 'message': 'Internal server error'}), 500
 
 if __name__ == '__main__':
     app.run(debug=True)

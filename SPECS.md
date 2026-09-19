@@ -1,6 +1,6 @@
-# filtersql JSON Payload Specification (v1.2.4)
+# filtersql JSON Payload Specification (v1.2.5)
 
-**Version**: 1.2.4 (Draft)
+**Version**: 1.2.5
 
 This document defines the formal, language-agnostic JSON payload specification for **filtersql**. Any implementation of this protocol (whether written in Python, Node.js, Go, Rust, or any other language) must accept and validate payloads conforming to this standard.
 
@@ -24,6 +24,7 @@ Every request payload must be a JSON object containing the top-level keys `actio
 |   ├── order (array of column-ordering definitions)          |
 |   ├── limit (object: start, length)                         |
 |   └── cursor (object: multi-column context metrics)         |
+|   └── direction (string: "seek" | "next" | "prev")          |
 +-------------------------------------------------------------+
 ```
 
@@ -89,10 +90,16 @@ The `filters` array serves as the collection point for constraints. By default, 
 | `istarts_with`, `not_istarts_with`| Prefix match / exclusion (Case-Insensitive)| `string` | String prefix matching |
 | `iends_with`, `not_iends_with` | Suffix match / exclusion (Case-Insensitive) | `string` | String suffix matching |
 | `null`, `notnull` | Emptiness evaluations | Omitted | `IS NULL` / `IS NOT NULL` |
-| `reverse_in` | Constant scanning across columns | `string` (comma-sep columns)| `? IN (col1, col2)` |
+| `reverse_in` | Constant scanning across columns | Scalar | `? IN (col1, col2)` |
 | `regexp`, `not_regexp` | Regular expression / exclusion (Case-Sensitive) | `string` | Native Regex tokens (`~`, `!~`, `regexp_like`) |
 | `iregexp`, `not_iregexp` | Regular expression / exclusion (Case-Insensitive) | `string` | Native Regex tokens (`~*`, `!~*`, etc.) |
 | `fts`, `fts_query` | Full-Text Search processing | `string` | `@@ websearch_to_tsquery` or `MATCH AGAINST` |
+
+For `reverse_in`, the field is a comma-separated list of column names, and value is a scalar.
+
+A scalar value is also accepted for `in`/`notin` and treated as a single-element list.
+
+`fts` is available on PostgreSQL and MySQL. `fts_query` is available on PostgreSQL only. Using either on an unsupported dialect raises `ValidationError`.
 
 #### Empty List Handling for Set Operators (`in` / `notin`)
 Passing an empty array (`"value": []`) to set evaluation operators is safely translated into deterministic SQL truths without throwing syntax errors:
@@ -133,12 +140,17 @@ The `order` property handles indexing sequences. It is an array of objects evalu
 ---
 
 ### 2.4 Keyset Pagination (`cursor` & `direction`)
-To execute high-efficiency pagination over substantial dataset windows without resorting to performance-degrading `OFFSET` syntax, the payload implements **Keyset Pagination** via `cursor` and `direction`.
 
-#### Invariant Rules:
-1.  If `cursor` is provided, `direction` **must** also be provided.
-2.  If `direction` is provided, `cursor` **must** also be provided.
-3.  Any mismatch or isolating omission of either token must result in an explicit `ValidationError`.
+To execute high-efficiency pagination over substantial dataset windows
+without resorting to performance-degrading `OFFSET` syntax, the payload
+implements **Keyset Pagination** via `cursor` and `direction`.
+
+If `cursor` is provided, `direction` must also be provided - a cursor
+without a direction is a `ValidationError`.
+
+`direction` may be provided without `cursor`. In that case it only
+inverts `ORDER BY`, which is useful for a "prev page" navigation where
+the cursor isn't yet known.
 
 #### Properties:
 * `cursor` (`object`): A flat dictionary mapping field tracking names to their last-seen tracking metric states. Supports single or multi-column coordinates.
@@ -158,27 +170,70 @@ To execute high-efficiency pagination over substantial dataset windows without r
 ### 2.5 Group By and Having
 
 `group_by` accepts a list of column names (plain strings).
-`having` uses the exact same filter format as `filters` - a `field` is
+
+`having` uses the exact same filter format as `filters`. A `field` is
 quoted as an identifier by default. An aggregate expression like `COUNT(*)`
 is not an identifier, so mark it `"raw": true` and repeat the expression
-itself, rather than referencing the column's `alias`. Referencing the alias
-directly will fail on PostgreSQL, which only exposes `SELECT`-list aliases
-to `ORDER BY`/`GROUP BY`, not to `HAVING`.
+itself, rather than referencing the column's `alias`.
+
+**Why not reference the alias?** PostgreSQL, Oracle, and SQL Server only
+expose SELECT-list aliases to `ORDER BY`/`GROUP BY`, not to `HAVING`.
+MySQL and SQLite are more permissive, but relying on that is non-portable.
+Repeating the expression works everywhere.
+
+**Note on `raw`:** `raw: true` requires the server to opt in via a
+`Datasource(allow_raw_fields=True)` (or the equivalent in another
+implementation). A payload alone cannot enable raw mode — this is a
+security boundary, not an oversight. If raw is not enabled, the query
+build fails with a `ConfigurationError`.
+
+```json
+// WRONG - fails on PostgreSQL, Oracle, SQL Server
+"having": [
+  { "field": "total", "operator": ">", "value": 5 }
+]
+
+// CORRECT - repeat the expression, mark it raw
+"having": [
+  { "field": "COUNT(*)", "raw": true, "operator": ">", "value": 5 }
+]
+```
+
+Full example:
 
 ```json
 {
   "action": "select",
   "source": "users",
   "columns": [
-    {"field": "status"},
-    {"field": "COUNT(*)", "raw": true, "alias": "total"}
+    { "field": "status" },
+    { "field": "COUNT(*)", "raw": true, "alias": "total" }
   ],
   "group_by": ["status"],
   "having": [
-    {"field": "COUNT(*)", "raw": true, "operator": ">", "value": 5}
+    { "field": "COUNT(*)", "raw": true, "operator": ">", "value": 5 }
   ]
 }
 ```
+
+### 2.6 Server-Side Configuration
+
+The following parameters are **not** part of the payload. They are set
+by the application when constructing the `Datasource` (or equivalent)
+and must never be read from the payload.
+
+| Parameter | Description |
+| :--- | :--- |
+| `dbms` | SQL dialect: `'Pg'`, `'SQLite'`, `'mysql'`, `'DuckDB'`, `'Oracle'`. Case-insensitive. |
+| `placeholder` | Parameter marker used in generated SQL: `%s` (Pg/MySQL), `?` (SQLite/DuckDB/Oracle), or a custom string. |
+| `scope` | Dict of `field: value` conditions applied to every operation. Used for multi-tenant filtering. Server-side only. |
+| `fts_language` | Language name passed to `websearch_to_tsquery` (PostgreSQL only, default: `'english'`). |
+| `allow_raw_fields` | If `false`, payloads containing `raw: true` raise `ConfigurationError`. |
+| `allow_raw_source` / `raw_source` | Enable a raw subquery as `source`. Must be explicitly opted in. |
+
+The `filtersql()` convenience function rejects any payload that
+contains one of these keys, to prevent a client from escalating its
+own privileges.
 
 ---
 
@@ -252,7 +307,7 @@ to `ORDER BY`/`GROUP BY`, not to `HAVING`.
     "cursor": {
       "type": "object",
       "additionalProperties": {
-        "type": ["string", "number", "boolean", "null"]
+        "type": ["string", "number", "boolean"]
       }
     },
     "direction": {
@@ -261,8 +316,7 @@ to `ORDER BY`/`GROUP BY`, not to `HAVING`.
     }
   },
   "dependencies": {
-    "cursor": ["direction"],
-    "direction": ["cursor"]
+    "cursor": ["direction"]
   },
   "definitions": {
     "filterElement": {
@@ -276,8 +330,10 @@ to `ORDER BY`/`GROUP BY`, not to `HAVING`.
             "value": {},
             "value_type": {
               "type": "string",
-              "enum": ["text", "numeric", "integer", "bigint", "date", "timestamp", "timestamptz", "boolean", "uuid"]
-            }
+              "enum": ["numeric", "integer", "bigint", "real", "double precision",
+                       "date", "timestamp", "timestamptz", "time", "boolean", "uuid"]
+            },
+            "raw": { "type": "boolean" }
           }
         },
         {
