@@ -24,7 +24,7 @@ jobs:
     - name: Install dependencies & package
       run: |
         python -m pip install --upgrade pip setuptools wheel
-        pip install --only-binary duckdb
+        pip install --only-binary duckdb duckdb
         pip install pytest hypothesis sqlglot
         pip install -e .
 
