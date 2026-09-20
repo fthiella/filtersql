@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.6] - 2026-09-20
+
+### Security
+- **Scope bypass in `insert()`, `update()`, and `delete()`.**
+  A client could pass a scoped field name (e.g. `tenant_id`) inside
+  `values` (for insert/update) or `id` (for delete) and bypass the
+  server-side tenant boundary. In `update()`, this allowed moving a
+  record out of its own scope. All three methods now raise
+  `ValidationError` when a scoped field collides with user input.
+
+### Fixed
+- `_safe_sql_literal()` now rejects null bytes instead of letting the
+  driver crash with an opaque error.
+- `_build_filter_group()` skips empty `{'or': []}` / `{'and': []}`
+  groups — including nested groups whose children are all empty —
+  instead of emitting an invalid `()` clause.
+- `delete()` validates that `id` is a dict (was `AttributeError`).
+- `where()` validates that `filters` is a list.
+- `select()` validates that `order` items are dicts with a `field` key,
+  and that `limit` is a dict.
+- `_build_limit()` handles `None`, non-integer, and negative values.
+- `_invert_order()` and `_cursor_operator()` now accept `'ASC'`/`'DESC'`.
+- `filtersql()` blacklist now also rejects `fts_language`.
+
+### Notes
+- No breaking changes to documented behavior.
+- Upgrade recommended for all multi-tenant deployments and for anyone
+  using `filtersql()` with untrusted input.
+
 ## [1.2.5] - 2026-09-19
 
 ### Fixed

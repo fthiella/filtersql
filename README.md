@@ -58,7 +58,6 @@ From JSON:
 {
   "action": "select",
   "source": "users",
-  "dbms":   "SQLite",
   "filters": [
     {
       "field": "name",

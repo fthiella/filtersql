@@ -325,6 +325,14 @@ class Datasource:
         """
         Build a SELECT query. Pass columns, filters, order, limit explicitly.
         """
+        active_order = order if order is not None else self.order
+        if active_order is not None:
+            if not isinstance(active_order, list):
+                raise ValidationError(f"Expected list for 'order', got {type(active_order).__name__}")
+            for item in active_order:
+                if not isinstance(item, dict) or not item.get('field'):
+                    raise ValidationError(f"Each item in 'order' must be a dict with a 'field' key: {item!r}")
+
         if filters is not None and not isinstance(filters, list):
             raise ValidationError(
                 f"Expected list for 'filters', got {type(filters).__name__}: {filters!r}"
@@ -374,7 +382,6 @@ class Datasource:
                 raise ValidationError(f"Invalid column format: {x}")
 
         active_direction = direction or self.direction
-        active_order = order if order is not None else self.order
         where_clause, where_values = self.where(filters=filters, direction=active_direction, cursor=cursor, order=active_order)
 
         having_clause = ""
@@ -385,19 +392,21 @@ class Datasource:
         values = where_values + having_values
 
         parsed_order = [
-            self._quote(x.get('field'), quote_char)
+            self._quote(x['field'], quote_char)
             + " "
-            + self._invert_order(x.get('order', 'asc'), active_direction == 'prev')
+            + self._invert_order(x.get('order') or 'asc', active_direction == 'prev')
             for x in active_order
         ]
 
         active_limit = limit if limit is not None else self.limit
         limit = ""
         if active_limit:
+            if not isinstance(active_limit, dict):
+                raise ValidationError(f"Expected dict for 'limit', got {type(active_limit).__name__}")
             limit = self._build_limit(
                 dbms=self.dbms, 
-                start=active_limit.get("start", 0), 
-                length=active_limit.get("length", DEFAULT_PAGE_LENGTH)
+                start=active_limit.get("start"), 
+                length=active_limit.get("length")
             )
 
         segments = []
@@ -453,6 +462,12 @@ class Datasource:
         if values and not isinstance(values, dict):
             raise ValidationError("Expected a dictionary for 'values'")
 
+        collisions = [k for k in (values or {}) if k in self.scope]
+        if collisions:
+            raise ValidationError(
+                f"Cannot set scoped field(s): {collisions}. "
+                f"Scope fields are managed server-side."
+            )
         final_values = {**(values or {}), **self.scope}
 
         source = self._resolve_source()
@@ -492,6 +507,13 @@ class Datasource:
         if not isinstance(values, dict):
             raise ValidationError("The 'values' parameter must be a dictionary.")
 
+        collisions = [k for k in values if k in self.scope]
+        if collisions:
+            raise ValidationError(
+                f"Cannot update scoped field(s): {collisions}. "
+                f"Scope fields are managed server-side."
+            )
+
         source = self._resolve_source()
         quote_char = DBMS_MAP[self.dbms]['quote']
 
@@ -525,6 +547,15 @@ class Datasource:
         """Build a DELETE statement. Requires id dict."""
         if not id:
             raise ValidationError("delete() requires at least one id field")
+        if not isinstance(id, dict):
+            raise ValidationError("The 'id' parameter must be a dictionary.")
+
+        collisions = [k for k in id if k in self.scope]
+        if collisions:
+            raise ValidationError(
+                f"Cannot filter on scoped field(s): {collisions}. "
+                f"Scope fields are managed server-side."
+            )
 
         my_filters = [{'field': k, 'operator': '=', 'value': v} for k, v in id.items()]
 
@@ -577,6 +608,11 @@ class Datasource:
         """Build a WHERE clause from filters and cursor. Returns (clause, values)."""
         active_direction = direction or self.direction
         active_order = order if order is not None else self.order
+
+        if filters is not None and not isinstance(filters, list):
+            raise ValidationError(
+                f"Expected list for 'filters', got {type(filters).__name__}: {filters!r}"
+            )
 
         if cursor is not None and not isinstance(cursor, dict):
             raise ValidationError(
@@ -717,14 +753,20 @@ class Datasource:
                 raise ValidationError(f"Invalid filter. dict expected, got: {type(item).__name__} ({item})")
 
             if 'or' in item:
+                if not isinstance(item['or'], list):
+                    raise ValidationError(f"Expected list for 'or' group, got {type(item['or']).__name__}")
                 sub_sql, sub_vals = self._build_filter_group(item['or'], join='or')
-                parts.append('(' + sub_sql + ')')
-                values.extend(sub_vals)
+                if sub_sql:
+                    parts.append('(' + sub_sql + ')')
+                    values.extend(sub_vals)
 
             elif 'and' in item:
+                if not isinstance(item['and'], list):
+                    raise ValidationError(f"Expected list for 'and' group, got {type(item['and']).__name__}")
                 sub_sql, sub_vals = self._build_filter_group(item['and'], join='and')
-                parts.append('(' + sub_sql + ')')
-                values.extend(sub_vals)
+                if sub_sql:
+                    parts.append('(' + sub_sql + ')')
+                    values.extend(sub_vals)
 
             else:
                 sql_frag, vals = self._build_condition_sql(item)
@@ -992,6 +1034,8 @@ class Datasource:
         this function ever sees the value.
         """
         value = str(raw_value)
+        if '\x00' in value:
+            raise ValidationError("SQL literal contains null byte.")
         if DBMS_MAP[self.dbms].get('literal_backslash_escapes'):
             value = value.replace('\\', '\\\\')
         return value.replace("'", "''")
@@ -1054,27 +1098,24 @@ class Datasource:
 
         return f"{quote}{escaped_name}{quote}"
 
-    def _invert_order(self, ord: str, inv: str) -> str:
-        if ord not in ['asc', 'desc']:
+    def _invert_order(self, ord: str, inv: str | bool) -> str:
+        ord_clean = str(ord).lower() if ord is not None else ''
+        if ord_clean not in ['asc', 'desc']:
             raise ValidationError("order must be 'asc' or 'desc'")
         if inv:
-            return 'desc' if ord == 'asc' else 'asc'
-        return ord
+            return 'desc' if ord_clean == 'asc' else 'asc'
+        return ord_clean
 
     def _cursor_operator(self, direction: str, col_order: str) -> str:
-        """
-        Decide the comparison operator for one cursor column,
-        taking both navigation direction and the column’s own
-        sort direction into account.
-        """
-        if col_order not in ('asc', 'desc'):
+        col_order_clean = str(col_order).lower() if col_order is not None else 'asc'
+        if col_order_clean not in ('asc', 'desc'):
             raise ValidationError("order must be 'asc' or 'desc'")
         if direction == 'seek':
             return '='
         if direction == 'next':
-            return '>' if col_order == 'asc' else '<'
+            return '>' if col_order_clean == 'asc' else '<'
         if direction == 'prev':
-            return '<' if col_order == 'asc' else '>'
+            return '<' if col_order_clean == 'asc' else '>'
         raise ValidationError(f"Invalid direction '{direction}'")
 
     def _resolve_source(self) -> str:
@@ -1110,15 +1151,20 @@ class Datasource:
         return self._quote(self.source, DBMS_MAP[self.dbms]['quote'])
 
     def _build_limit(self, **kwargs) -> str:
-        start = int(kwargs.get("start", 0))
-        length = int(kwargs.get("length", DEFAULT_PAGE_LENGTH))
+        raw_start = kwargs.get("start")
+        raw_length = kwargs.get("length")
+
+        try:
+            start = int(raw_start) if raw_start is not None else 0
+            length = int(raw_length) if raw_length is not None else DEFAULT_PAGE_LENGTH
+        except (ValueError, TypeError):
+            raise ValidationError("Limit 'start' and 'length' must be integers.")
+
+        if start < 0 or length < 0:
+            raise ValidationError("Limit 'start' and 'length' cannot be negative.")
 
         limit_template = DBMS_MAP[kwargs["dbms"]].get("limit", "")
-
-        return limit_template.format(
-            start=start,
-            length=length
-        )
+        return limit_template.format(start=start, length=length)
 
 def filtersql(payload=None, dbms=None, scope=None, raw_source=False, allow_raw_source=False, allow_raw_fields=False, placeholder=None, **kwargs) -> tuple[str, list]:
     payload = payload.copy() if payload else {}
@@ -1135,7 +1181,7 @@ def filtersql(payload=None, dbms=None, scope=None, raw_source=False, allow_raw_s
         raise ValidationError(f"Invalid action '{action}'. Please specify: select, insert, update, delete.")
 
     for key in ['raw_source', 'allow_raw_source', 'allow_raw_fields',
-                'placeholder', 'dbms', 'scope']:
+                'placeholder', 'dbms', 'scope', 'fts_language']:
         if key in payload:
             raise ValidationError(f"'{key}' is a server-side configuration flag and cannot be set from the payload.")
 

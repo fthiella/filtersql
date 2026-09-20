@@ -1726,5 +1726,99 @@ class TestGroupByHaving(unittest.TestCase):
         self.assertTrue(where_idx < group_idx < having_idx < order_idx)
         self.assertEqual(v, [True, 100000])
 
+class TestScopeIsolation(unittest.TestCase):
+    """Regression tests for the scope-bypass fix (SEC-01)."""
+
+    def test_insert_rejects_scoped_field(self):
+        ds = make_ds(scope={'tenant_id': 100})
+        with self.assertRaises(ValidationError) as cm:
+            ds.insert(values={'tenant_id': 200, 'amount': 500})
+        self.assertIn('tenant_id', str(cm.exception))
+
+    def test_update_rejects_scoped_field(self):
+        ds = make_ds(scope={'tenant_id': 100})
+        with self.assertRaises(ValidationError) as cm:
+            ds.update(id={'id': 42}, values={'tenant_id': 200, 'amount': 500})
+        self.assertIn('tenant_id', str(cm.exception))
+
+    def test_delete_rejects_scoped_field(self):
+        ds = make_ds(scope={'tenant_id': 100})
+        with self.assertRaises(ValidationError) as cm:
+            ds.delete(id={'id': 42, 'tenant_id': 100})
+        self.assertIn('tenant_id', str(cm.exception))
+
+    def test_insert_still_works_without_collision(self):
+        """Non-scoped fields must go through normally."""
+        ds = make_ds(scope={'tenant_id': 100})
+        q, v = ds.insert(values={'amount': 500})
+        self.assertIn('"tenant_id"', q)
+        self.assertIn('"amount"', q)
+        self.assertIn(100, v)
+        self.assertIn(500, v)
+
+    def test_update_still_works_without_collision(self):
+        ds = make_ds(scope={'tenant_id': 100})
+        q, v = ds.update(id={'id': 42}, values={'amount': 500})
+        self.assertIn('"amount" = %s', q)
+        self.assertIn('"tenant_id" = %s', q)  # nel WHERE
+        # Order: SET values, then WHERE values (scope first, then id)
+        self.assertEqual(v, [500, 100, 42])
+
+class TestValidationGaps(unittest.TestCase):
+    """Regression tests for audit findings BUG-01 and BUG-02."""
+
+    def test_delete_rejects_non_dict_id(self):
+        ds = make_ds()
+        with self.assertRaises(ValidationError):
+            ds.delete(id=[1, 2])
+
+    def test_where_rejects_non_list_filters(self):
+        ds = make_ds()
+        with self.assertRaises(ValidationError):
+            ds.where(filters={'field': 'x', 'operator': '=', 'value': 1})
+
+    def test_empty_or_group_is_skipped(self):
+        """An empty {'or': []} must not produce '()' in the WHERE clause."""
+        ds = make_ds()
+        q, v = get_query(ds, filters=[
+            {'field': 'status', 'operator': '=', 'value': 'active'},
+            {'or': []},
+        ])
+        self.assertNotIn('()', q)
+        self.assertIn('"status" = %s', q)
+
+    def test_empty_and_group_is_skipped(self):
+        ds = make_ds()
+        q, v = get_query(ds, filters=[
+            {'field': 'status', 'operator': '=', 'value': 'active'},
+            {'and': []},
+        ])
+        self.assertNotIn('()', q)
+
+    def test_empty_and_group_is_skipped(self):
+        ds = make_ds()
+        q, v = get_query(ds, filters=[
+            {'field': 'status', 'operator': '=', 'value': 'active'},
+            {'and': []},
+        ])
+        self.assertNotIn('()', q)
+        self.assertIn('"status" = %s', q)
+
+    def test_nested_empty_group_is_skipped(self):
+        """A group whose children are all empty must also be skipped."""
+        ds = make_ds()
+        q, v = get_query(ds, filters=[
+            {'field': 'status', 'operator': '=', 'value': 'active'},
+            {'or': [{'or': []}, {'and': []}]},
+        ])
+        self.assertNotIn('()', q)
+        self.assertIn('"status" = %s', q)
+
+    def test_all_empty_groups_produce_no_where(self):
+        """If every filter is an empty group, no WHERE clause should appear."""
+        ds = make_ds()
+        q, v = get_query(ds, filters=[{'or': []}, {'and': []}])
+        self.assertNotIn('where', q.lower())
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)

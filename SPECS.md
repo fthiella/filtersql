@@ -1,6 +1,6 @@
-# filtersql JSON Payload Specification (v1.2.5)
+# filtersql JSON Payload Specification (v1.2.6)
 
-**Version**: 1.2.5
+**Version**: 1.2.6
 
 This document defines the formal, language-agnostic JSON payload specification for **filtersql**. Any implementation of this protocol (whether written in Python, Node.js, Go, Rust, or any other language) must accept and validate payloads conforming to this standard.
 
@@ -23,7 +23,7 @@ Every request payload must be a JSON object containing the top-level keys `actio
 |   ├── having (array of standard or logically nested dicts)  |
 |   ├── order (array of column-ordering definitions)          |
 |   ├── limit (object: start, length)                         |
-|   └── cursor (object: multi-column context metrics)         |
+|   ├── cursor (object: multi-column context metrics)         |
 |   └── direction (string: "seek" | "next" | "prev")          |
 +-------------------------------------------------------------+
 ```
