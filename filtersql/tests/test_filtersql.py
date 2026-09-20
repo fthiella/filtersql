@@ -10,7 +10,10 @@ import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 import filtersql.sql as sql
-from filtersql.sql import FilterSQLError, ValidationError, ConfigurationError, InvalidIdentifierError
+from filtersql.sql import (
+    Datasource, filtersql,
+    FilterSQLError, ValidationError, ConfigurationError, InvalidIdentifierError,
+)
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -271,6 +274,32 @@ class TestFilterOperators(unittest.TestCase):
         with self.assertRaises(ValidationError):
             q, v = self._where('nonexistent_op', 'foo')
 
+    def test_fts_language_via_kwarg(self):
+        q, v = filtersql(
+            payload={
+                'action': 'select',
+                'source': 'docs',
+                'filters': [{'field': 'tsv', 'operator': 'fts', 'value': 'contratti'}],
+            },
+            dbms='Pg',
+            placeholder='%s',
+            fts_language='italian',
+        )
+        self.assertIn("'italian'", q)
+        self.assertNotIn("'english'", q)
+
+    def test_fts_language_rejected_from_payload(self):
+        with self.assertRaises(ValidationError) as cm:
+            filtersql(
+                payload={
+                    'action': 'select',
+                    'source': 'docs',
+                    'fts_language': 'italian',
+                },
+                dbms='Pg',
+                placeholder='%s',
+            )
+        self.assertIn('fts_language', str(cm.exception))
 
 # ---------------------------------------------------------------------------
 # 3. OR / AND groups

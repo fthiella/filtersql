@@ -279,7 +279,7 @@ class Datasource:
         scope: dict = None,
         direction: str = None,
         placeholder: str = None,
-        fts_language: str = 'english'
+        fts_language: str = None
     ):
         """
         Datasource initialization
@@ -306,7 +306,7 @@ class Datasource:
         self.limit           = limit
         self.scope           = scope or {}
         self.direction       = direction
-        self.fts_language    = fts_language
+        self.fts_language    = fts_language or 'english'
 
         self.placeholder = placeholder or DBMS_MAP[self.dbms]["placeholder"]
 
@@ -1166,7 +1166,9 @@ class Datasource:
         limit_template = DBMS_MAP[kwargs["dbms"]].get("limit", "")
         return limit_template.format(start=start, length=length)
 
-def filtersql(payload=None, dbms=None, scope=None, raw_source=False, allow_raw_source=False, allow_raw_fields=False, placeholder=None, **kwargs) -> tuple[str, list]:
+def filtersql(payload=None, dbms=None, scope=None, raw_source=False,
+              allow_raw_source=False, allow_raw_fields=False,
+              placeholder=None, fts_language=None, **kwargs) -> tuple[str, list]:
     payload = payload.copy() if payload else {}
     payload.update(kwargs)
 
@@ -1196,6 +1198,7 @@ def filtersql(payload=None, dbms=None, scope=None, raw_source=False, allow_raw_s
         scope=scope,
         direction=payload.get('direction'),
         placeholder=placeholder,
+        fts_language=fts_language,
     )
 
     if action == 'select':

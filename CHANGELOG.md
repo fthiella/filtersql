@@ -24,7 +24,10 @@ All notable changes to this project will be documented in this file.
   and that `limit` is a dict.
 - `_build_limit()` handles `None`, non-integer, and negative values.
 - `_invert_order()` and `_cursor_operator()` now accept `'ASC'`/`'DESC'`.
-- `filtersql()` blacklist now also rejects `fts_language`.
+- `filtersql()` blacklist extended: `fts_language` is now rejected when
+  supplied via the payload, alongside `dbms`, `placeholder`, `scope`,
+  and `allow_raw_*`. All server-side configuration follows the same rule
+  - kwarg only, never payload.
 
 ### Notes
 - No breaking changes to documented behavior.
