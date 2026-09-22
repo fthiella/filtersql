@@ -2,6 +2,45 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.7] - 2026-09-22
+
+### Security
+- **Scope bypass via qualified or normalized write-target keys.**
+  `insert()` and `update()` accepted column keys such as `"tenant_id "`
+  (trailing whitespace) or `"users.tenant_id"` (qualified) that
+  `_quote()` normalizes to the same physical column as a `scope`-enforced
+  key, but that the scope-collision check - which compared raw strings -
+  did not recognize. On MySQL, `SET users.tenant_id = ...` is accepted
+  and silently updated the scope column; on SQLite, trailing whitespace
+  was stripped by `_quote()` and the same effect occurred. Both allowed
+  a client to overwrite the column that determines its own tenant.
+
+  Write-target keys (the keys of `values` in `insert()`/`update()` and
+  of `id` in `update()`/`delete()`) must now be a single bare
+  identifier - letters, digits, underscore, no qualification, quoting,
+  or JSONB path. The scope-collision check additionally compares
+  case-insensitively, since quoted identifiers are case-insensitive on
+  SQLite and MySQL. This closes the bypass by construction: rather than
+  trying to detect every dialect-specific spelling of "the same column",
+  the spellings that would require detection are rejected before the
+  comparison runs.
+
+### Breaking Changes
+- Keys in `values` (`insert()`, `update()`) and `id` (`update()`,
+  `delete()`) must now be plain identifiers. Qualified names
+  (`users.id`), JSONB paths (`attributes->>x`), quoted names
+  (`` `id` ``), and any key containing whitespace are rejected with
+  `InvalidIdentifierError`. The `id` parameter was previously allowed
+  to contain JSONB paths; use `filters` in `select()` for non-key
+  filtering.
+
+### Notes
+- No other behavior changed. The `scope` feature continues to work as
+  before for plain identifiers.
+- Upgrade recommended for all multi-tenant deployments. If you use
+  `scope`, this release closes a path that let a client reassign its
+  own records to another tenant.
+
 ## [1.2.6] - 2026-09-20
 
 ### Security

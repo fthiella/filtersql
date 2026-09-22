@@ -462,12 +462,19 @@ class Datasource:
         if values and not isinstance(values, dict):
             raise ValidationError("Expected a dictionary for 'values'")
 
-        collisions = [k for k in (values or {}) if k in self.scope]
-        if collisions:
-            raise ValidationError(
-                f"Cannot set scoped field(s): {collisions}. "
-                f"Scope fields are managed server-side."
-            )
+        # Reject explicit values for any scope-enforced column BEFORE
+        # merging scope in. Comparison is case-insensitive and runs only
+        # after each key is confirmed to be a bare identifier (see
+        # _quote_write_target below) - so 'users.tenant_id' or
+        # '`users`.`tenant_id`' (MySQL accepts a table-qualified column
+        # on the SET side of an UPDATE) is rejected as malformed before
+        # it ever reaches this comparison, rather than needing to be
+        # recognized as an alias for 'tenant_id' by it.
+        if values:
+            for k in values:
+                self._validate_bare_identifier(k)
+            self._check_scope_collision(values.keys())
+
         final_values = {**(values or {}), **self.scope}
 
         source = self._resolve_source()
@@ -478,7 +485,7 @@ class Datasource:
         placeholders = []
 
         for k, v in final_values.items():
-            fields.append(self._quote(k, quote_char))
+            fields.append(self._quote_write_target(k, quote_char))
             placeholders.append(self.placeholder)
             set_values.append(v)
 
@@ -507,12 +514,17 @@ class Datasource:
         if not isinstance(values, dict):
             raise ValidationError("The 'values' parameter must be a dictionary.")
 
-        collisions = [k for k in values if k in self.scope]
-        if collisions:
-            raise ValidationError(
-                f"Cannot update scoped field(s): {collisions}. "
-                f"Scope fields are managed server-side."
-            )
+        for k in values:
+            self._validate_bare_identifier(k)
+        self._check_scope_collision(values.keys())
+
+        # 'id' identifies the row(s) to update on this same single table -
+        # same reasoning as 'values': no legitimate reason to qualify it,
+        # and allowing qualification here would let a scoped column be
+        # reintroduced into the WHERE clause under a different spelling.
+        for k in id:
+            self._validate_bare_identifier(k)
+        self._check_scope_collision(id.keys())
 
         source = self._resolve_source()
         quote_char = DBMS_MAP[self.dbms]['quote']
@@ -521,7 +533,7 @@ class Datasource:
         set_values = []
 
         for k, v in values.items():
-            set_parts.append(f"{self._quote(k, quote_char)} = {self.placeholder}")
+            set_parts.append(f"{self._quote_write_target(k, quote_char)} = {self.placeholder}")
             set_values.append(v)
 
         my_filters = [{'field': k, 'operator': '=', 'value': v} for k, v in id.items()]
@@ -550,12 +562,9 @@ class Datasource:
         if not isinstance(id, dict):
             raise ValidationError("The 'id' parameter must be a dictionary.")
 
-        collisions = [k for k in id if k in self.scope]
-        if collisions:
-            raise ValidationError(
-                f"Cannot filter on scoped field(s): {collisions}. "
-                f"Scope fields are managed server-side."
-            )
+        for k in id:
+            self._validate_bare_identifier(k)
+        self._check_scope_collision(id.keys())
 
         my_filters = [{'field': k, 'operator': '=', 'value': v} for k, v in id.items()]
 
@@ -1043,6 +1052,61 @@ class Datasource:
     # Kept as an alias: _safe_jsonb_key was the original, narrower name for
     # this helper before it was generalized to cover fts_language too.
     _safe_jsonb_key = _safe_sql_literal
+
+    @staticmethod
+    def _validate_bare_identifier(name: str) -> str:
+        """
+        Requires `name` to be a single bare identifier - no schema/table
+        qualification, no quoting/backticks, no JSONB path. Returns the
+        stripped name unchanged (for chaining), or raises.
+
+        Used for insert()/update() `values` keys and update()/delete()
+        `id` keys: all of these always target one column on the single
+        table named as `source`, on the single row/set of rows selected
+        by `id` - there is no legitimate reason for any of them to be
+        qualified. Rejecting qualification outright, rather than trying
+        to detect every dialect-specific alias for "the same column"
+        after the fact, is what closes the `scope`-bypass below: a
+        collision check that compares 'tenant_id' against a value dict
+        key can be defeated by spelling the same column as
+        'users.tenant_id' or '`users`.`tenant_id`' (MySQL accepts a
+        table-qualified column on the SET side of an UPDATE); if that
+        spelling is rejected before the comparison ever runs, there is
+        nothing left to detect.
+        """
+        if not name or not str(name).strip():
+            raise InvalidIdentifierError("Identifier cannot be empty.")
+        name = str(name).strip()
+        if not re.fullmatch(r'\w+', name):
+            raise InvalidIdentifierError(
+                f"Invalid column name: {name!r}. Must be a single bare "
+                f"identifier here - no schema/table qualification, "
+                f"quoting, or JSONB path is allowed."
+            )
+        return name
+
+    def _quote_write_target(self, name: str, quote: str) -> str:
+        """Validates `name` as a bare identifier, then quotes it."""
+        return self._quote(self._validate_bare_identifier(name), quote)
+
+    def _check_scope_collision(self, keys) -> None:
+        """
+        Raises if any of `keys` collides with a `scope`-enforced column,
+        case-insensitively. `keys` should already have passed
+        _validate_bare_identifier (or _quote_write_target) for each
+        entry, so a plain case-insensitive string comparison is
+        sufficient - there is no remaining alias/qualifier syntax left
+        that could smuggle a match past this check.
+        """
+        if not self.scope:
+            return
+        scope_keys_lower = {str(k).strip().lower() for k in self.scope}
+        collisions = [k for k in keys if str(k).strip().lower() in scope_keys_lower]
+        if collisions:
+            raise ValidationError(
+                f"Cannot set scoped field(s): {collisions}. "
+                f"Scope fields are managed server-side."
+            )
 
     def _quote(self, name: str, quote: str) -> str:
         """

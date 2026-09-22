@@ -1,6 +1,6 @@
-# filtersql JSON Payload Specification (v1.2.6)
+# filtersql JSON Payload Specification (v1.2.7)
 
-**Version**: 1.2.6
+**Version**: 1.2.7
 
 This document defines the formal, language-agnostic JSON payload specification for **filtersql**. Any implementation of this protocol (whether written in Python, Node.js, Go, Rust, or any other language) must accept and validate payloads conforming to this standard.
 
@@ -235,6 +235,45 @@ The `filtersql()` convenience function rejects any payload that
 contains one of these keys, to prevent a client from escalating its
 own privileges.
 
+### 2.7 Column keys in `values` and `id`
+
+The keys of `values` (in `insert` and `update`) and of `id` (in `update`
+and `delete`) are column names on the single table named as `source`.
+They must be **single bare identifiers**: letters, digits, underscore,
+no whitespace.
+
+Qualified names (`users.id`), quoted names, and JSONB paths
+(`attributes->>x`) are rejected with `InvalidIdentifierError`.
+
+This restriction is what makes the `scope` collision check reliable.
+`scope` keys are compared against these keys by case-insensitive string
+match, and the check would be defeatable if a client could reference
+the same physical column under a different spelling - for example
+`users.tenant_id`, or `tenant_id` with a trailing space, both of which
+normalize to the same column in some dialects.
+
+To filter rows by a JSONB path or a qualified name, use `filters` in
+`select()`. The `id` parameter is for primary-key lookup only.
+
+```json
+// Accepted - the scope collision check works on these
+{
+  "action": "update",
+  "source": "users",
+  "id":     { "id": 42 },
+  "values": { "email": "new@example.com" }
+}
+```
+
+```json
+// Rejected - qualified, contains a dot
+{
+  "action": "update",
+  "source": "users",
+  "id":     { "users.id": 42 },
+  "values": { "email": "new@example.com" }
+}
+```
 ---
 
 ## 3. JSON Schema Specification (Draft 7)

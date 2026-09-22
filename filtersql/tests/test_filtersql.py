@@ -821,16 +821,6 @@ class TestQuoteInSQL(unittest.TestCase):
         q, _ = get_query(ds)
         self.assertIn('"m"."doc_date" desc', q)
 
-    def test_schema_field_in_update_id(self):
-        ds = make_ds()
-        q, v = ds.update(id={'m.id': 42}, values={'first_name': 'John'})
-        self.assertIn('"m"."id"', q)
-
-    def test_schema_field_in_insert(self):
-        ds = make_ds()
-        q, v = ds.insert(values={'m.first_name': 'John'})
-        self.assertIn('"m"."first_name"', q)
-
     def test_mysql_backtick_in_select(self):
         ds = sql.Datasource(source='users', dbms='mysql')
         q, _ = ds.select(columns=[{'field': 'first_name'}])

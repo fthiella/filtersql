@@ -222,13 +222,18 @@ query, values = ds.select(columns=columns, filters=user_filters)
 # → ... WHERE "tenant_id" = %s AND ...
 
 query, values = ds.delete(id={'id': 99})
-# → ... WHERE "id" = %s AND "tenant_id" = %s
+# → ... WHERE "tenant_id" = %s AND "id" = %s
 
 query, values = ds.insert(values={'title': 'New doc'})
 # → INSERT INTO "documents" ("title", "tenant_id") VALUES (%s, %s)
 ```
 
-Note: in `insert()`, scope values take precedence over values in case of collision. This prevents a client from overriding the tenant boundary by passing a colliding column.
+**Note on column names**: the keys of `values` (in `insert` and `update`) and
+of `id` (in `update` and `delete`) must be plain column names - no dots, no
+JSONB paths, no quoting. This is what makes the `scope` collision check
+reliable across dialects: a client can't reference a scoped column under a
+different spelling (e.g. `users.tenant_id`, or `tenant_id` with trailing
+whitespace) and slip past the check.
 
 ---
 
@@ -332,6 +337,10 @@ query, values = ds.update(
 # delete
 query, values = ds.delete(id={'id': 42})
 ```
+
+Keys in `values` and `id` must be plain column names. Qualified names
+(`users.id`) and JSONB paths (`data->>x`) are rejected — use `filters`
+in `select()` for non-key filtering.
 
 ---
 
