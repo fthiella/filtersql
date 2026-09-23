@@ -2,6 +2,7 @@
 from __future__ import annotations
 import re
 import os
+import unicodedata
 
 DBMS_MAP = {
     'SQLite': {
@@ -222,8 +223,8 @@ DBMS_MAP = {
 # 'SQLite'` comparison throughout the class keeps working unchanged -
 # only the constructor needs to know about this table.
 _DBMS_CASE_INSENSITIVE_LOOKUP = {k.lower(): k for k in DBMS_MAP}
-
 DEFAULT_PAGE_LENGTH = 100
+_FORBIDDEN_IDENTIFIER_CHARS = frozenset('"`.\\')
 
 class FilterSQLError(Exception):
     """Base class for exceptions in this module."""
@@ -304,7 +305,14 @@ class Datasource:
         self.raw_source      = raw_source
         self.order           = order or []
         self.limit           = limit
-        self.scope           = scope or {}
+
+        if scope is not None:
+            if not isinstance(scope, dict):
+                raise ConfigurationError(f"Expected dict for 'scope', got {type(scope).__name__}")
+            for k in scope:
+                self._validate_bare_identifier(k)
+        self.scope = scope or {}
+
         self.direction       = direction
         self.fts_language    = fts_language or 'english'
 
@@ -325,13 +333,7 @@ class Datasource:
         """
         Build a SELECT query. Pass columns, filters, order, limit explicitly.
         """
-        active_order = order if order is not None else self.order
-        if active_order is not None:
-            if not isinstance(active_order, list):
-                raise ValidationError(f"Expected list for 'order', got {type(active_order).__name__}")
-            for item in active_order:
-                if not isinstance(item, dict) or not item.get('field'):
-                    raise ValidationError(f"Each item in 'order' must be a dict with a 'field' key: {item!r}")
+        active_order = self._validate_order(order if order is not None else self.order)
 
         if filters is not None and not isinstance(filters, list):
             raise ValidationError(
@@ -358,9 +360,9 @@ class Datasource:
                 # Simple column name
                 parsed_columns.append(self._quote(x, quote_char))
             elif isinstance(x, dict):
-                field = x.get('field') or x.get('name')
+                field = x.get('field')
                 if not field:
-                    raise ValidationError(f"Column dict missing 'field' or 'name': {x}")
+                    raise ValidationError(f"Column dict missing 'field': {x}")
 
                 if x.get('raw', False):
                     if not self.allow_raw_fields:
@@ -613,10 +615,21 @@ class Datasource:
             out.append(tail)
         return ''.join(out)
 
+    @staticmethod
+    def _validate_order(order_list: list | None) -> list:
+        if order_list is None:
+            return []
+        if not isinstance(order_list, list):
+            raise ValidationError(f"Expected list for 'order', got {type(order_list).__name__}")
+        for item in order_list:
+            if not isinstance(item, dict) or not item.get('field'):
+                raise ValidationError(f"Each item in 'order' must be a dict with a 'field' key: {item!r}")
+        return order_list
+
     def where(self, *, filters: list = None, direction: str = None, cursor: dict = None, order: list = None) -> tuple[str, list]:
         """Build a WHERE clause from filters and cursor. Returns (clause, values)."""
         active_direction = direction or self.direction
-        active_order = order if order is not None else self.order
+        active_order = self._validate_order(order if order is not None else self.order)
 
         if filters is not None and not isinstance(filters, list):
             raise ValidationError(
@@ -1056,34 +1069,65 @@ class Datasource:
     @staticmethod
     def _validate_bare_identifier(name: str) -> str:
         """
-        Requires `name` to be a single bare identifier - no schema/table
-        qualification, no quoting/backticks, no JSONB path. Returns the
-        stripped name unchanged (for chaining), or raises.
+        Requires `name` to be a single bare identifier suitable as a
+        write target (values/id keys).
 
-        Used for insert()/update() `values` keys and update()/delete()
-        `id` keys: all of these always target one column on the single
-        table named as `source`, on the single row/set of rows selected
-        by `id` - there is no legitimate reason for any of them to be
-        qualified. Rejecting qualification outright, rather than trying
-        to detect every dialect-specific alias for "the same column"
-        after the fact, is what closes the `scope`-bypass below: a
-        collision check that compares 'tenant_id' against a value dict
-        key can be defeated by spelling the same column as
-        'users.tenant_id' or '`users`.`tenant_id`' (MySQL accepts a
-        table-qualified column on the SET side of an UPDATE); if that
-        spelling is rejected before the comparison ever runs, there is
-        nothing left to detect.
+        Accepted: letters (ASCII and non-ASCII), digits, underscore, and
+        spaces between characters. So "quantità", "qta totale", and
+        "n° fattura" are all valid - there is no reason to reject a
+        character that SQL can quote safely.
+
+        Rejected: characters that would break identifier quoting (`"`,
+        backtick, backslash), change the structural meaning of the string
+        (dot = schema qualification, -> and ->> = JSONB path), introduce
+        invisible ambiguity (control characters), or appear as leading/
+        trailing whitespace (the signature of the collision-check bypass
+        this method exists to close).
+
+        The returned value is the NFC canonical form. Callers must use
+        the return value, not the original, when constructing SQL -
+        otherwise a caller could pass an NFC key for validation and an
+        NFD key for execution, hitting a different column on byte-exact
+        dialects.
         """
-        if not name or not str(name).strip():
+        if not isinstance(name, str) or not name:
             raise InvalidIdentifierError("Identifier cannot be empty.")
-        name = str(name).strip()
-        if not re.fullmatch(r'\w+', name):
+
+        canonical = unicodedata.normalize('NFC', name)
+        if canonical != name:
             raise InvalidIdentifierError(
-                f"Invalid column name: {name!r}. Must be a single bare "
-                f"identifier here - no schema/table qualification, "
-                f"quoting, or JSONB path is allowed."
+                f"Column name {name!r} is not in Unicode NFC form. "
+                f"Normalize it to {canonical!r} before using it as a "
+                f"write-target key."
             )
-        return name
+
+        if name != name.strip():
+            raise InvalidIdentifierError(
+                f"Column name {name!r} has leading or trailing whitespace. "
+                f"filtersql does not strip identifiers, so this would be "
+                f"treated as a column literally named {name!r}. Remove the "
+                f"whitespace if it was accidental."
+            )
+
+        for ch in name:
+            if ch in _FORBIDDEN_IDENTIFIER_CHARS:
+                raise InvalidIdentifierError(
+                    f"Column name {name!r} contains forbidden character "
+                    f"{ch!r}. Write-target keys may not contain quotes, "
+                    f"backslash, or dot."
+                )
+            if unicodedata.category(ch).startswith('C'):
+                raise InvalidIdentifierError(
+                    f"Column name {name!r} contains a control character."
+                )
+
+        if '->' in name:
+            raise InvalidIdentifierError(
+                f"Column name {name!r} contains a JSONB path operator. "
+                f"Use `filters` in select() for JSONB filtering."
+            )
+
+        return canonical
 
     def _quote_write_target(self, name: str, quote: str) -> str:
         """Validates `name` as a bare identifier, then quotes it."""
@@ -1091,17 +1135,25 @@ class Datasource:
 
     def _check_scope_collision(self, keys) -> None:
         """
-        Raises if any of `keys` collides with a `scope`-enforced column,
-        case-insensitively. `keys` should already have passed
-        _validate_bare_identifier (or _quote_write_target) for each
-        entry, so a plain case-insensitive string comparison is
-        sufficient - there is no remaining alias/qualifier syntax left
-        that could smuggle a match past this check.
+        Raises if any of `keys` collides with a scope-enforced column.
+
+        Comparison is by NFC + casefold on both sides. NFC so that an
+        NFD spelling of a scoped column collides with an NFC scope key;
+        casefold because quoted identifiers are case-insensitive on
+        SQLite and MySQL.
+
+        `keys` should already have passed _validate_bare_identifier, so
+        there is no remaining normalization gap between what is checked
+        here and what _quote_write_target produces.
         """
         if not self.scope:
             return
-        scope_keys_lower = {str(k).strip().lower() for k in self.scope}
-        collisions = [k for k in keys if str(k).strip().lower() in scope_keys_lower]
+
+        def canon(k):
+            return unicodedata.normalize('NFC', str(k)).casefold()
+
+        scope_keys = {canon(k) for k in self.scope}
+        collisions = [k for k in keys if canon(k) in scope_keys]
         if collisions:
             raise ValidationError(
                 f"Cannot set scoped field(s): {collisions}. "
@@ -1224,8 +1276,10 @@ class Datasource:
         except (ValueError, TypeError):
             raise ValidationError("Limit 'start' and 'length' must be integers.")
 
-        if start < 0 or length < 0:
-            raise ValidationError("Limit 'start' and 'length' cannot be negative.")
+        if start < 0:
+            raise ValidationError("Limit 'start' cannot be negative.")
+        if length <= 0:
+            raise ValidationError("Limit 'length' must be greater than 0.")
 
         limit_template = DBMS_MAP[kwargs["dbms"]].get("limit", "")
         return limit_template.format(start=start, length=length)
@@ -1233,61 +1287,63 @@ class Datasource:
 def filtersql(payload=None, dbms=None, scope=None, raw_source=False,
               allow_raw_source=False, allow_raw_fields=False,
               placeholder=None, fts_language=None, **kwargs) -> tuple[str, list]:
-    payload = payload.copy() if payload else {}
-    payload.update(kwargs)
+    if payload is not None and not isinstance(payload, dict):
+        raise ValidationError(f"Expected dict for 'payload', got {type(payload).__name__}")
 
-    action      = (payload.get('action', '') or '').lower()
-    source      = payload.get('source')
-    dbms        = dbms or 'Pg'
-    raw_source  = raw_source
+    data = (payload or {}).copy()
+    data.update(kwargs)
 
-    if not source:
-        raise ValidationError("Need to specify 'source'.")
+    raw_action = data.get('action')
+    if not raw_action or not isinstance(raw_action, str):
+        raise ValidationError("Payload requires a valid string 'action' ('select', 'insert', 'update', 'delete').")
+    
+    action = raw_action.lower()
     if action not in ['select', 'insert', 'update', 'delete']:
         raise ValidationError(f"Invalid action '{action}'. Please specify: select, insert, update, delete.")
 
+    source = data.get('source')
+    if not source or not isinstance(source, str) or not source.strip():
+        raise ValidationError("Payload requires a non-empty string 'source'.")
+
     for key in ['raw_source', 'allow_raw_source', 'allow_raw_fields',
                 'placeholder', 'dbms', 'scope', 'fts_language']:
-        if key in payload:
+        if key in data:
             raise ValidationError(f"'{key}' is a server-side configuration flag and cannot be set from the payload.")
 
     ds = Datasource(
         source=source,
-        dbms=dbms,
+        dbms=dbms or 'Pg',
         raw_source=raw_source,
         allow_raw_source=allow_raw_source,
         allow_raw_fields=allow_raw_fields,
-        order=payload.get('order'),
-        limit=payload.get('limit'),
+        order=data.get('order'),
+        limit=data.get('limit'),
         scope=scope,
-        direction=payload.get('direction'),
+        direction=data.get('direction'),
         placeholder=placeholder,
         fts_language=fts_language,
     )
 
     if action == 'select':
         return ds.select(
-            columns=payload.get('columns'),
-            filters=payload.get('filters'),
-            group_by=payload.get('group_by'),
-            having=payload.get('having'),
-            cursor=payload.get('cursor'),
-            direction=payload.get('direction'),
+            columns=data.get('columns'),
+            filters=data.get('filters'),
+            group_by=data.get('group_by'),
+            having=data.get('having'),
+            cursor=data.get('cursor'),
+            direction=data.get('direction'),
         )
-
     elif action == 'insert':
         return ds.insert(
-            values=payload.get('values', {}),
-            returning=payload.get('returning')
+            values=data.get('values', {}),
+            returning=data.get('returning')
         )
-
     elif action == 'update':
         return ds.update(
-            id=payload.get('id', {}),
-            values=payload.get('values', {})
+            id=data.get('id', {}),
+            values=data.get('values', {})
         )
-
     elif action == 'delete':
         return ds.delete(
-            id=payload.get('id', {})
+            id=data.get('id', {})
         )

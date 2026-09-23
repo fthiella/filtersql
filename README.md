@@ -228,12 +228,14 @@ query, values = ds.insert(values={'title': 'New doc'})
 # → INSERT INTO "documents" ("title", "tenant_id") VALUES (%s, %s)
 ```
 
-**Note on column names**: the keys of `values` (in `insert` and `update`) and
-of `id` (in `update` and `delete`) must be plain column names - no dots, no
-JSONB paths, no quoting. This is what makes the `scope` collision check
-reliable across dialects: a client can't reference a scoped column under a
-different spelling (e.g. `users.tenant_id`, or `tenant_id` with trailing
-whitespace) and slip past the check.
+**Note on column names**: the keys of `values` (in `insert` and `update`)
+and of `id` (in `update` and `delete`) must be single identifiers in
+Unicode NFC form. Spaces between characters, accented letters, and
+other non-ASCII letters are accepted (`qta totale`, `quantità`). Leading
+or trailing whitespace, quoted names, qualified names (`users.id`), and
+JSONB paths (`data->>x`) are rejected. This is what makes the `scope`
+collision check reliable: a client can't reference a scoped column
+under a different spelling and slip past the check.
 
 ---
 

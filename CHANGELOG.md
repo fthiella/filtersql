@@ -5,34 +5,57 @@ All notable changes to this project will be documented in this file.
 ## [1.2.7] - 2026-09-22
 
 ### Security
-- **Scope bypass via qualified or normalized write-target keys.**
+- **Scope bypass via identifier normalization.**
   `insert()` and `update()` accepted column keys such as `"tenant_id "`
   (trailing whitespace) or `"users.tenant_id"` (qualified) that
-  `_quote()` normalizes to the same physical column as a `scope`-enforced
-  key, but that the scope-collision check - which compared raw strings -
-  did not recognize. On MySQL, `SET users.tenant_id = ...` is accepted
-  and silently updated the scope column; on SQLite, trailing whitespace
-  was stripped by `_quote()` and the same effect occurred. Both allowed
-  a client to overwrite the column that determines its own tenant.
+  `_quote()` normalizes to the same physical column as a
+  `scope`-enforced key, but that the collision check - which compared
+  raw strings - did not recognize. On MySQL, `SET users.tenant_id = ...`
+  is accepted and silently updated the scope column; on SQLite, trailing
+  whitespace was stripped by `_quote()` and the same effect occurred.
+  Both allowed a client to overwrite the column that determines its own
+  tenant.
 
-  Write-target keys (the keys of `values` in `insert()`/`update()` and
-  of `id` in `update()`/`delete()`) must now be a single bare
-  identifier - letters, digits, underscore, no qualification, quoting,
-  or JSONB path. The scope-collision check additionally compares
-  case-insensitively, since quoted identifiers are case-insensitive on
-  SQLite and MySQL. This closes the bypass by construction: rather than
-  trying to detect every dialect-specific spelling of "the same column",
-  the spellings that would require detection are rejected before the
-  comparison runs.
+  Write-target keys now reject the leading/trailing whitespace,
+  qualification, quoting, and JSONB-path syntaxes that were being
+  normalized away, and the scope-collision check compares keys by
+  Unicode NFC + casefold on both sides. This closes the bypass by
+  construction: rather than trying to detect every dialect-specific
+  spelling of "the same column", the spellings that would require
+  detection are rejected, and the remaining comparison has no
+  normalization gap.
+
+### Added
+- Write-target keys (`values` in `insert`/`update`, `id` in
+  `update`/`delete`) now accept the full set of characters that are
+  legal in a quoted SQL identifier: spaces between characters
+  (`"qta totale"`), non-ASCII letters (`"quantità"`, `"città"`), and
+  symbols that are not structurally significant (`"n° fattura"`).
+  Previously these were rejected by an overly strict `\w+` check.
+
+### Fixed
+- `where()` now validates its `order` argument the same way `select()`
+  does. Previously a malformed `order` passed directly to `where()`
+  raised `TypeError`/`KeyError` from inside `_build_where` instead of
+  a `ValidationError`.
+- `_build_limit()` now rejects `length <= 0`, aligning with the
+  `"minimum": 1` declared in the SPECS JSON Schema. Previously `length=0`
+  produced `LIMIT 0, 0`.
+- `filtersql()` now validates that `payload` is a dict and that `action`
+  is a string before calling `.lower()`. Previously `filtersql(payload=[1,2,3])`
+  raised `AttributeError`, and `filtersql({"action": 1})` raised
+  `AttributeError` on the `.lower()` call.
+- `Datasource.__init__()` now validates that `scope` is a dict and that
+  each key is a bare identifier. Previously a malformed scope key
+  (e.g. `"tenant_id "`) was accepted at construction and failed later
+  at the first query.
 
 ### Breaking Changes
-- Keys in `values` (`insert()`, `update()`) and `id` (`update()`,
-  `delete()`) must now be plain identifiers. Qualified names
-  (`users.id`), JSONB paths (`attributes->>x`), quoted names
-  (`` `id` ``), and any key containing whitespace are rejected with
-  `InvalidIdentifierError`. The `id` parameter was previously allowed
-  to contain JSONB paths; use `filters` in `select()` for non-key
-  filtering.
+- Write-target keys must be valid Unicode identifiers in NFC form.
+  Leading or trailing whitespace, qualified names (`users.id`),
+  quoted names, backslashes, and JSONB paths (`data->>x`) are
+  rejected with `InvalidIdentifierError`. `id` no longer accepts
+  JSONB paths; use `filters` in `select()` for non-key filtering.
 
 ### Notes
 - No other behavior changed. The `scope` feature continues to work as

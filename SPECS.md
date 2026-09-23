@@ -237,43 +237,54 @@ own privileges.
 
 ### 2.7 Column keys in `values` and `id`
 
-The keys of `values` (in `insert` and `update`) and of `id` (in `update`
-and `delete`) are column names on the single table named as `source`.
-They must be **single bare identifiers**: letters, digits, underscore,
-no whitespace.
+The keys of `values` (in `insert` and `update`) and of `id` (in
+`update` and `delete`) are column names on the single table named
+as `source`.
 
-Qualified names (`users.id`), quoted names, and JSONB paths
-(`attributes->>x`) are rejected with `InvalidIdentifierError`.
+They must be **single identifiers in Unicode NFC form**. Accepted
+characters are letters (ASCII and non-ASCII), digits, underscore,
+and spaces between characters. So `quantità`, `qta totale`, and
+`n° fattura` are valid. Rejected are characters that would break
+identifier quoting or change the meaning of the string: quotes,
+backslash, dot (schema qualification), `->`/`->>` (JSONB paths),
+control characters, and leading/trailing whitespace.
+
+The NFC requirement is a hard contract: filtersql does not
+normalize input, it rejects non-NFC keys with `InvalidIdentifierError`.
+This makes the comparison below reliable, and puts the responsibility
+for canonical form on the schema, not on the request.
 
 This restriction is what makes the `scope` collision check reliable.
-`scope` keys are compared against these keys by case-insensitive string
-match, and the check would be defeatable if a client could reference
-the same physical column under a different spelling - for example
-`users.tenant_id`, or `tenant_id` with a trailing space, both of which
-normalize to the same column in some dialects.
+`scope` keys are compared against `values`/`id` keys by NFC + casefold
+string match. If a client could reference the same physical column
+under a different spelling - `users.tenant_id`, `tenant_id` with
+trailing whitespace, `tenant_id` in NFD form - the check would be
+defeatable. By rejecting those spellings at the door, the check has
+no gap to close.
 
 To filter rows by a JSONB path or a qualified name, use `filters` in
 `select()`. The `id` parameter is for primary-key lookup only.
 
 ```json
-// Accepted - the scope collision check works on these
+// Accepted - normal identifier, space inside the name
 {
   "action": "update",
-  "source": "users",
+  "source": "invoices",
   "id":     { "id": 42 },
-  "values": { "email": "new@example.com" }
+  "values": { "qta totale": 100, "città": "Milano" }
 }
 ```
 
 ```json
-// Rejected - qualified, contains a dot
+// Rejected - trailing whitespace
 {
   "action": "update",
-  "source": "users",
-  "id":     { "users.id": 42 },
-  "values": { "email": "new@example.com" }
+  "source": "invoices",
+  "id":     { "id": 42 },
+  "values": { "tenant_id ": 99 }
 }
 ```
+
 ---
 
 ## 3. JSON Schema Specification (Draft 7)

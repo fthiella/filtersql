@@ -7,6 +7,7 @@ Tests SQL generation without a live DB.
 import sys
 import os
 import unittest
+import unicodedata
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', '..'))
 import filtersql.sql as sql
@@ -1155,6 +1156,12 @@ class TestScope(unittest.TestCase):
         self.assertNotIn('where', q.lower())
         self.assertEqual(v, [])
 
+    def test_scope_bypass_vectors_rejected_update_id(self):
+        for bad_key in self._bad_keys():
+            ds = make_ds(scope={"tenant_id": 42})
+            with self.assertRaises((ValidationError, InvalidIdentifierError)):
+                ds.update(id={bad_key: 1}, values={'amount': 99})
+
 # ---------------------------------------------------------------------------
 # 19. filtersql() convenience function
 # ---------------------------------------------------------------------------
@@ -1610,6 +1617,12 @@ class TestQuoteEdgeCases(unittest.TestCase):
         result = self._q('first-name')
         self.assertEqual(result, '"first-name"')
 
+    def test_nfd_identifier_rejected(self):
+        nfd = unicodedata.normalize('NFD', 'quantità')
+        ds = make_ds()
+        with self.assertRaises(InvalidIdentifierError):
+            ds.insert(values={nfd: 5})
+
 class TestCursorViaFiltersqlFunction(unittest.TestCase):
     """Test cursor parameter via filtersql() function."""
 
@@ -1782,6 +1795,64 @@ class TestScopeIsolation(unittest.TestCase):
         self.assertIn('"tenant_id" = %s', q)  # nel WHERE
         # Order: SET values, then WHERE values (scope first, then id)
         self.assertEqual(v, [500, 100, 42])
+
+    def _bad_keys(self):
+        return [
+            "tenant_id ",        # trailing space
+            " tenant_id",        # leading space
+            "tenant_id\t",       # tab
+            "tenant_id\n",       # newline
+            "users.tenant_id",   # qualified
+            "tenant_id.",        # trailing dot
+            "data->>x",          # JSONB path
+            'tenant"id',         # quote
+            "tenant\\id",        # backslash
+            "tenant_id\x00",     # null byte
+        ]
+
+    def test_scope_bypass_vectors_rejected_update_values(self):
+        for bad_key in self._bad_keys():
+            ds = make_ds(scope={"tenant_id": 42})
+            with self.assertRaises(
+                (ValidationError, InvalidIdentifierError),
+                msg=f"update().values accepted {bad_key!r}",
+            ):
+                ds.update(id={"id": 1}, values={bad_key: 99})
+
+    def test_scope_bypass_vectors_rejected_insert_values(self):
+        for bad_key in self._bad_keys():
+            ds = make_ds(scope={"tenant_id": 42})
+            with self.assertRaises(
+                (ValidationError, InvalidIdentifierError),
+                msg=f"insert().values accepted {bad_key!r}",
+            ):
+                ds.insert(values={bad_key: 99})
+
+    def test_scope_bypass_vectors_rejected_delete_id(self):
+        for bad_key in self._bad_keys():
+            ds = make_ds(scope={"tenant_id": 42})
+            with self.assertRaises(
+                (ValidationError, InvalidIdentifierError),
+                msg=f"delete().id accepted {bad_key!r}",
+            ):
+                ds.delete(id={bad_key: 99})
+
+    def test_unicode_and_spaces_accepted(self):
+        for good_key in ["tenant_id", "qta totale", "quantità", "città",
+                         "n° fattura", "_private"]:
+            ds = make_ds()
+            q, v = ds.insert(values={good_key: 5})
+            self.assertIn(f'"{good_key}"', q,
+                          msg=f"insert().values rejected {good_key!r}")
+
+    def test_scope_bypass_vectors_rejected_update_id(self):
+        for bad_key in self._bad_keys():
+            ds = make_ds(scope={"tenant_id": 42})
+            with self.assertRaises(
+                (ValidationError, InvalidIdentifierError),
+                msg=f"update().id accepted {bad_key!r}",
+            ):
+                ds.update(id={bad_key: 1}, values={'amount': 99})
 
 class TestValidationGaps(unittest.TestCase):
     """Regression tests for audit findings BUG-01 and BUG-02."""
