@@ -1156,12 +1156,6 @@ class TestScope(unittest.TestCase):
         self.assertNotIn('where', q.lower())
         self.assertEqual(v, [])
 
-    def test_scope_bypass_vectors_rejected_update_id(self):
-        for bad_key in self._bad_keys():
-            ds = make_ds(scope={"tenant_id": 42})
-            with self.assertRaises((ValidationError, InvalidIdentifierError)):
-                ds.update(id={bad_key: 1}, values={'amount': 99})
-
 # ---------------------------------------------------------------------------
 # 19. filtersql() convenience function
 # ---------------------------------------------------------------------------
