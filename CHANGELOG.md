@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [1.2.7] - 2026-09-22
+## [1.2.7] - 2026-09-24
 
 ### Security
 - **Scope bypass via identifier normalization.**
