@@ -778,12 +778,12 @@ class TestQuote(unittest.TestCase):
         result = self._q('data->>name')
         self.assertNotIn(' ', result)
 
-    # Whitespace
-    def test_whitespace_stripped(self):
-        self.assertEqual(self._q('  first_name  '), '"first_name"')
+    def test_leading_trailing_whitespace_rejected(self):
+        with self.assertRaises(InvalidIdentifierError):
+            self._q('  first_name  ')
 
-    def test_whitespace_in_schema_prefix_stripped(self):
-        self.assertEqual(self._q('  m . first_name  '), '"m"."first_name"')
+    def test_whitespace_around_schema_separator_still_trimmed(self):
+        self.assertEqual(self._q('m . first_name'), '"m"."first_name"')
 
     # Error cases
     def test_empty_string_raises(self):

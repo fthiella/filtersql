@@ -36,6 +36,7 @@ DBMS_MAP = {
             'null':             '{col} is null',
             'notnull':          '{col} is not null',
             'between':          '{col} between {param1} and {param2}',
+            # SQLite's REGEXP has no case-insensitive mode; iregexp is an alias.
             'regexp':           '{col} regexp {param}',
             'iregexp':          '{col} regexp {param}',
             'not_regexp':       '{col} not regexp {param}',
@@ -167,12 +168,6 @@ DBMS_MAP = {
         },
         "limit": 'limit {start}, {length}',
         "like_escape": {"style": "backslash", "escape_char": "\\", "wildcards": ["%", "_"]},
-        # MySQL treats backslash as an in-string escape character by default
-        # (NO_BACKSLASH_ESCAPES not assumed), unlike Pg/SQLite/DuckDB, which
-        # use standard-conforming strings where backslash has no special
-        # meaning inside '...' literals. Any raw value spliced into a MySQL
-        # string literal - not passed as a bound parameter - must have its
-        # backslashes doubled too, or it can leave the literal unterminated.
         "literal_backslash_escapes": True,
     },
     'Oracle': {
@@ -216,15 +211,14 @@ DBMS_MAP = {
     }
 }
 
-# Case-insensitive lookup: normalizes any casing of a dbms name (e.g.
-# 'PG', 'pg', 'Pg') to the canonical key used everywhere else in this
-# file. DBMS_MAP's own keys stay exactly as they are ('Pg', 'SQLite',
-# 'mysql', ...) so every existing `self.dbms == 'Pg'` / `self.dbms ==
-# 'SQLite'` comparison throughout the class keeps working unchanged -
-# only the constructor needs to know about this table.
-_DBMS_CASE_INSENSITIVE_LOOKUP = {k.lower(): k for k in DBMS_MAP}
 DEFAULT_PAGE_LENGTH = 100
+MAX_IN_LIST = 1000
+MAX_LIMIT_LENGTH = 10_000
+MAX_FILTER_DEPTH = 32
+
+_DBMS_CASE_INSENSITIVE_LOOKUP = {k.lower(): k for k in DBMS_MAP}
 _FORBIDDEN_IDENTIFIER_CHARS = frozenset('"`.\\')
+_JSONB_OP_RE = re.compile(r'(->>|->)')
 
 class FilterSQLError(Exception):
     """Base class for exceptions in this module."""
@@ -244,8 +238,11 @@ class ConfigurationError(FilterSQLError):
 
 class Datasource:
     """
-    filtersql Class
-    Sql queries for AI, DataTables, LLM outputs and any other Frontend application
+    Parameterized SQL from a filter AST (frontend, DataTables, LLM).
+
+    Values are always bound. Identifiers go through _quote (reads) or
+    _quote_write_target (insert/update/delete keys). Tenant `scope` is
+    enforced server-side and cannot be set from the payload.
     """
 
     # Operators whose SQL pattern embeds wildcard characters (%, _, *, ?) around
@@ -766,7 +763,12 @@ class Datasource:
 
         return ' and '.join(q_where), m_data + s_data
 
-    def _build_filter_group(self, filters: list, join: str = 'and') -> tuple:
+    def _build_filter_group(self, filters: list, join: str = 'and', _depth: int = 0) -> tuple:
+        if _depth > MAX_FILTER_DEPTH:
+            raise ValidationError(
+                f"Filter groups nested deeper than {MAX_FILTER_DEPTH}."
+            )
+
         parts = []
         values = []
 
@@ -777,7 +779,7 @@ class Datasource:
             if 'or' in item:
                 if not isinstance(item['or'], list):
                     raise ValidationError(f"Expected list for 'or' group, got {type(item['or']).__name__}")
-                sub_sql, sub_vals = self._build_filter_group(item['or'], join='or')
+                sub_sql, sub_vals = self._build_filter_group(item['or'], join='or', _depth=_depth + 1)
                 if sub_sql:
                     parts.append('(' + sub_sql + ')')
                     values.extend(sub_vals)
@@ -785,7 +787,7 @@ class Datasource:
             elif 'and' in item:
                 if not isinstance(item['and'], list):
                     raise ValidationError(f"Expected list for 'and' group, got {type(item['and']).__name__}")
-                sub_sql, sub_vals = self._build_filter_group(item['and'], join='and')
+                sub_sql, sub_vals = self._build_filter_group(item['and'], join='and', _depth=_depth + 1)
                 if sub_sql:
                     parts.append('(' + sub_sql + ')')
                     values.extend(sub_vals)
@@ -862,7 +864,7 @@ class Datasource:
         col: str,
         searchcriteria: str,
         search_value=None,
-        value_type: str = "text",
+        value_type: str | None = None,
         raw: bool = False
     ) -> str:
         if raw and not self.allow_raw_fields:
@@ -876,44 +878,37 @@ class Datasource:
             raise ValidationError(f"Operator '{searchcriteria}' not valid for {self.dbms}. Valid: {valid}")
 
         raw_statement = DBMS_MAP[self.dbms]["search_map"][searchcriteria]
+        quote_char = DBMS_MAP[self.dbms]["quote"]
 
         if searchcriteria == 'reverse_in':
-            col_list = [c.strip() for c in col.split(',')]
-            parsed_cols = []
-            for c in col_list:
-                if self.dbms == 'Pg' and '->>' in c:
-                    parts = c.split('->>')
-                    main_col = self._quote(parts[0].strip(), DBMS_MAP[self.dbms]["quote"])
-                    safe_key = self._safe_jsonb_key(parts[1].strip())
-                    parsed_cols.append(f"{main_col}->>'{safe_key}'")
-                else:
-                    parsed_cols.append(self._quote(c, DBMS_MAP[self.dbms]["quote"]))
-
+            col_list = [c.strip() for c in str(col).split(',') if c.strip()]
+            if not col_list:
+                raise ValidationError(f"reverse_in requires at least one column, got: {col!r}")
+            parsed_cols = [self._quote(c, quote_char) for c in col_list]
             return raw_statement.format(param=self.placeholder, cols=', '.join(parsed_cols))
 
         if raw:
             col_expr = str(col)
             param_expr = self.placeholder
-        elif self.dbms == 'Pg' and '->>' in col:
-            parts = col.split('->>')
-            main_col = self._quote(parts[0].strip(), DBMS_MAP[self.dbms]["quote"])
-            key = self._safe_jsonb_key(parts[1].strip())
-
-            if value_type:
-                cast_type = value_type.lower()
-                if cast_type not in self._PG_ALLOWED_CAST_TYPES:
-                    raise ValidationError(
-                        f"Invalid value_type '{value_type}' for JSONB path. "
-                        f"Allowed: {sorted(list(self._PG_ALLOWED_CAST_TYPES))}"
-                    )
-                col_expr = f"({main_col}->>'{key}')::{cast_type}"
-                param_expr = f"{self.placeholder}::{cast_type}"
-            else:
-                col_expr = f"{main_col}->>'{key}'"
-                param_expr = self.placeholder
         else:
-            col_expr = self._quote(col, DBMS_MAP[self.dbms]["quote"])
+            col_expr = self._quote(col, quote_char)
             param_expr = self.placeholder
+            # Cast only on Pg JSONB paths. 'text' is the JSONB default (no cast).
+            if (
+                self.dbms == 'Pg'
+                and value_type
+                and str(value_type).strip().lower() not in ('text',)
+            ):
+                _, path = self._parse_jsonb_path(col)
+                if path:
+                    cast_type = value_type.lower()
+                    if cast_type not in self._PG_ALLOWED_CAST_TYPES:
+                        raise ValidationError(
+                            f"Invalid value_type '{value_type}' for JSONB path. "
+                            f"Allowed: {sorted(list(self._PG_ALLOWED_CAST_TYPES))}"
+                        )
+                    col_expr = f"({col_expr})::{cast_type}"
+                    param_expr = f"{self.placeholder}::{cast_type}"
 
         if searchcriteria in ['in', 'notin']:
             # Normalize to a list FIRST, then decide "empty", so this
@@ -926,6 +921,11 @@ class Datasource:
             # only surfaces as an opaque driver-level binding error.
             if not isinstance(search_value, (list, tuple)):
                 search_value = [search_value] if search_value is not None else []
+
+            if len(search_value) > MAX_IN_LIST:
+                raise ValidationError(
+                    f"'{searchcriteria}' accepts at most {MAX_IN_LIST} values, got {len(search_value)}."
+                )
 
             if searchcriteria == 'in':
                 if not search_value:
@@ -1160,58 +1160,83 @@ class Datasource:
                 f"Scope fields are managed server-side."
             )
 
+    def _parse_jsonb_path(self, name: str) -> tuple[str, list]:
+        """
+        Split a Pg JSONB path into (base_identifier, [(operator, key), ...]).
+
+        Non-Pg dialects, or names with no -> / ->>, return (name, []).
+        Cosmetic whitespace around operators is trimmed from keys.
+        Trailing operators with no key raise InvalidIdentifierError.
+        """
+        if self.dbms != 'Pg' or '->' not in name:
+            return name, []
+
+        parts = _JSONB_OP_RE.split(name)
+        if len(parts) == 1:
+            return name, []
+
+        base = parts[0].strip()
+        path = []
+        for i in range(1, len(parts), 2):
+            op = parts[i]
+            if i + 1 >= len(parts):
+                raise InvalidIdentifierError(
+                    f"JSONB path is missing a key after {op!r}: {name!r}"
+                )
+            key = parts[i + 1].strip()
+            if not key:
+                raise InvalidIdentifierError(
+                    f"JSONB path is missing a key after {op!r}: {name!r}"
+                )
+            path.append((op, key))
+
+        if not base:
+            raise InvalidIdentifierError(
+                f"JSONB path is missing a column: {name!r}"
+            )
+        return base, path
+
     def _quote(self, name: str, quote: str) -> str:
         """
-        Secure quoting that distinguishes between column and table context.
-        Uses standard SQL identifier escaping (doubling the quote character)
-        to allow any valid legacy column name safely.
+        Quote an identifier for this dialect.
+
+        Single entry point for SELECT/WHERE/ORDER/GROUP column refs
+        (schema.table, Pg JSONB paths). Write targets go through
+        _quote_write_target, which rejects dots and JSONB first.
+
+        Leading/trailing whitespace on the whole name is rejected, not
+        stripped — same rule as _validate_bare_identifier. Whitespace
+        around '.' and '->'/'->>' is treated as cosmetic and trimmed.
         """
-
-        if not name or not str(name).strip():
+        if not isinstance(name, str) or not name:
             raise InvalidIdentifierError("Identifier cannot be empty.")
-
-        name = str(name).strip()
-
-        # Security check: null bytes crash many underlying C drivers (e.g., psycopg2)
+        if name != name.strip():
+            raise InvalidIdentifierError(
+                f"Column name {name!r} has leading or trailing whitespace. "
+                f"filtersql does not strip identifiers, so this would be "
+                f"treated as a column literally named {name!r}. Remove the "
+                f"whitespace if it was accidental."
+            )
         if '\x00' in name:
             raise InvalidIdentifierError("Identifier contains null byte.")
 
-        # Parse JSONB expressions (Pg)
-        if self.dbms == 'Pg' and ('->>' in name or '->' in name):
-            # Split on JSONB operators '->>'' or '->'
-            # (?=...) lookahead
-            parts = re.split(r'(->>|->)', name)
+        base, path = self._parse_jsonb_path(name)
+        if path:
+            quoted_base = self._quote(base, quote)
+            safe_path = "".join(
+                f"{op}'{self._safe_jsonb_key(key)}'" for op, key in path
+            )
+            return f"{quoted_base}{safe_path}"
 
-            # The first part is the main column, quote it normally
-            safe_col = self._quote(parts[0].strip(), quote)
-
-            # Rebuild the rest of the path safely
-            safe_path = ""
-            for i in range(1, len(parts), 2):
-                operator = parts[i]
-                safe_key = self._safe_jsonb_key(parts[i+1])
-                safe_path += f"{operator}'{safe_key}'"
-
-            return f"{safe_col}{safe_path}"
-
-        # Parse dot notation (schema.table)
         if '.' in name:
             parts = [p.strip() for p in name.split('.') if p.strip()]
-            # If every segment was blank ('.', ' . ', '..', ...), filtering
-            # empties leaves parts == [], which .join()s into '' below with
-            # no error - an empty identifier silently spliced into the SQL
-            # text. Catch that here rather than letting it through quiet.
             if not parts:
                 raise InvalidIdentifierError(f"Identifier has no valid segments: {name!r}")
             if len(parts) > 2:
                 raise InvalidIdentifierError(f"Too many parts in identifier: {name}")
             return ".".join(self._quote(p, quote) for p in parts)
 
-        # Standard Identifier Escaping
-        # Pg/SQLite/Oracle: " becomes ""
-        # MySQL: ` becomes ``
         escaped_name = name.replace(quote, quote * 2)
-
         return f"{quote}{escaped_name}{quote}"
 
     def _invert_order(self, ord: str, inv: str | bool) -> str:
@@ -1280,6 +1305,10 @@ class Datasource:
             raise ValidationError("Limit 'start' cannot be negative.")
         if length <= 0:
             raise ValidationError("Limit 'length' must be greater than 0.")
+        if length > MAX_LIMIT_LENGTH:
+            raise ValidationError(
+                f"Limit 'length' cannot exceed {MAX_LIMIT_LENGTH}."
+            )
 
         limit_template = DBMS_MAP[kwargs["dbms"]].get("limit", "")
         return limit_template.format(start=start, length=length)
@@ -1305,6 +1334,11 @@ def filtersql(payload=None, dbms=None, scope=None, raw_source=False,
     if not source or not isinstance(source, str) or not source.strip():
         raise ValidationError("Payload requires a non-empty string 'source'.")
 
+    if not dbms:
+        raise ConfigurationError(
+            f"dbms is required. Valid: {list(DBMS_MAP.keys())}"
+        )
+
     for key in ['raw_source', 'allow_raw_source', 'allow_raw_fields',
                 'placeholder', 'dbms', 'scope', 'fts_language']:
         if key in data:
@@ -1312,7 +1346,7 @@ def filtersql(payload=None, dbms=None, scope=None, raw_source=False,
 
     ds = Datasource(
         source=source,
-        dbms=dbms or 'Pg',
+        dbms=dbms,
         raw_source=raw_source,
         allow_raw_source=allow_raw_source,
         allow_raw_fields=allow_raw_fields,

@@ -2,6 +2,66 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.2.8] - 2026-10-02
+
+### Changed
+- **`_quote()` now rejects leading/trailing whitespace instead of silently
+  stripping it** - this applies to `select()`'s `columns`/`filters`/`order`/
+  `group_by`, not just the write-target identifiers already covered by
+  `_validate_bare_identifier` since 1.2.7. A field such as `'  status '`
+  previously resolved silently to `"status"`; it now raises
+  `InvalidIdentifierError`. Whitespace *around* a `.` schema separator or
+  a `->`/`->>` JSONB operator is still cosmetic and trimmed (e.g.
+  `'m . first_name'` still works) - only leading/trailing whitespace on
+  the identifier as a whole is rejected. This is a breaking change for
+  any caller relying on the old silent-strip behavior, most likely
+  payloads assembled from loosely-validated frontend input.
+- Centralized Pg JSONB path parsing into a single `_parse_jsonb_path`
+  helper, used by both `_quote()` and `_build_condition` (previously
+  duplicated, with separate, slightly different splitting logic in each).
+  As a side effect, a field whose key portion itself contains a literal
+  `->`/`->>` substring (e.g. `attrs->>'a->>b'`) no longer has the part
+  after the first occurrence silently dropped - the old code's
+  `col.split('->>')` discarded everything past index 1. The new code
+  preserves all of it, reinterpreted as chained JSONB extractions. Note
+  that this remains an inherent ambiguity of the `field` string syntax:
+  there is still no way to express a literal `->>` as part of a JSONB
+  key name. Not security-relevant (values stay correctly escaped either
+  way) - this is a correctness/data-loss fix, not a vulnerability fix.
+
+### Security
+- `MAX_IN_LIST` (1000): `in`/`notin` now reject value lists larger than
+  this, raising `ValidationError` instead of building an arbitrarily
+  large `IN (...)` clause.
+- `MAX_LIMIT_LENGTH` (10,000): `limit.length` above this now raises
+  `ValidationError`.
+- `MAX_FILTER_DEPTH` (32): nested `and`/`or` filter groups deeper than
+  this now raise `ValidationError` instead of recursing unbounded.
+
+### Added
+- `filtersql()` now requires `dbms` explicitly and raises
+  `ConfigurationError` if it's missing. Previously a missing `dbms`
+  silently defaulted to `'Pg'`, which could generate Postgres-specific
+  SQL (e.g. `chr(37)`-based wildcard escaping) against a different
+  target database without any warning. This is a breaking change for
+  any caller relying on the implicit `'Pg'` default.
+
+### Fixed
+- Updated two pre-existing tests (`test_schema_field_in_insert`,
+  `test_schema_field_in_update_id`) that asserted on generated SQL
+  which, on inspection, was never actually valid on any dialect -
+  `insert into "t" ("m"."first_name") ...` and
+  `... where "m"."id" = ?` both fail at execution (verified against
+  real SQLite and via sqlglot for Postgres), since neither insert() nor
+  update() ever declares the alias `m` for the target table. Both now
+  correctly assert `InvalidIdentifierError`, consistent with the
+  write-target qualification restriction added in 1.2.7.
+
+### Notes
+- Upgrade recommended for anyone passing filter/column fields sourced
+  from loosely-validated input (frontends, LLM output) where accidental
+  leading/trailing whitespace was previously tolerated silently.
+
 ## [1.2.7] - 2026-09-24
 
 ### Security
