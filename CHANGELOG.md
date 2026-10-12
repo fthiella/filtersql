@@ -2,6 +2,71 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.0] - 2026-10-12
+
+### Added
+- **`allowed_columns` and `allowed_sources`**: server-side, exact-match
+  allowlists. With `allowed_columns` set, every column a client can name -
+  `columns`, `filters`/`having` (nested groups included), `order`,
+  `group_by`, `cursor`, `returning`, and the keys of `values` and `id` - must
+  be listed verbatim, or `ValidationError` is raised. Nothing is normalized:
+  case, whitespace, qualification and Unicode look-alikes are all different
+  strings. While active, `SELECT *` and `raw` columns/filters are refused.
+  `scope` columns are injected after the check and do not need to be listed,
+  so a client that may not name `tenant_id` can neither filter on nor set it.
+  `allowed_sources` is the same check on `source`, for every action. `None`
+  (the default) keeps the previous behaviour; an empty collection allows
+  nothing. Both are rejected from the `filtersql()` payload like the other
+  server-side parameters.
+
+### Removed (breaking)
+- **The `reverse_in` operator.** It took several column names packed into one
+  comma-separated `field` string, which cannot be checked against an
+  exact-match allowlist, and it was the injection surface of the 1.2.1 CVE.
+  Using it now raises `ValidationError: Operator 'reverse_in' not valid`. If
+  you need "value is in one of these columns", build it as an `or` group of
+  `=` filters, one per column.
+
+### Changed (breaking)
+- **Filters reject `None`.** `col = NULL` is never true in SQL, so
+  `{"operator": "=", "value": null}` used to build a query that silently
+  matched nothing. Every operator except `null`/`notnull` now raises
+  `ValidationError` for a `None` or missing `value`, and for a `None` element
+  inside the array of `in`, `notin` or `between` (`IN (NULL)` does not match
+  NULL rows either). Writing NULL is unchanged: `insert()`/`update()` still
+  accept `None` in `values`.
+
+- **Wildcard patterns are now bound as part of the value.** Operators
+  `contains`/`starts_with`/`ends_with` and their `i*`/`not_*` variants
+  used to build the pattern in the SQL text (`col like '%' || %s || '%'`),
+  which required per-dialect workarounds (`chr(37)` on Pg, `char(37)` on
+  MySQL, `'%'` on SQLite/Oracle) and broke pymysql/mysqlclient, which
+  interpret literal `%` in the SQL as a format specifier. The wildcard
+  markers are now wrapped around the bound value: the SQL is plain
+  `col like %s`, and the driver binds `'%foo%'`. There is no `%` (or `*`)
+  anywhere in the generated SQL for these operators anymore.
+
+  **Impact on callers:** the `values` list returned by `select()` /
+  `where()` for these operators is different. `{'operator': 'icontains',
+  'value': 'Smith'}` now returns `['%Smith%']`, not `['Smith']`. Anything
+  that re-reads, logs, or replays the `values` list should be updated.
+  The executed result set is identical.
+
+### Tests
+- New `TestAllowlists` and `TestNoneRejectedInFilters`. The allowlist suite
+  was mutation-checked: removing any one non-redundant check from `sql.py`
+  makes at least one test fail.
+- `test_reverse_in*` now assert that the operator is rejected;
+  `test_debug_replaces_none_with_null` builds its `None` through `insert()`.
+
+### Notes
+- Upgrade checklist:
+  - Search your payload builders for `reverse_in` and for `value: None`
+    on non-null operators.
+  - Check that nothing downstream assumes `values == input` for
+    `contains` / `starts_with` / `ends_with` (and their `i*` / `not_*`
+    variants) — the bound value now includes the `%` markers.
+  
 ## [1.2.8] - 2026-10-02
 
 ### Changed

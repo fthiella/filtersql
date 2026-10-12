@@ -5,10 +5,10 @@ from hypothesis import given, settings, strategies as st
 from filtersql.sql import Datasource, FilterSQLError
 
 # =====================================================================
-# 1. STRATEGIE DI GENERAZIONE HYPOTHESIS
+# 1. HYPOTHESIS GENERATION STRATEGIES
 # =====================================================================
 
-# Mappatura tra i DBMS della libreria e i dialetti riconosciuti da sqlglot
+# Mapping between library DBMS and sqlglot recognized dialects
 DIALECT_MAP = {
     'Pg': 'postgres',
     'SQLite': 'sqlite',
@@ -17,14 +17,14 @@ DIALECT_MAP = {
     'DuckDB': 'duckdb'
 }
 
-# Filtro foglia semplice
+# Simple leaf filter
 base_filter_st = st.fixed_dictionaries({
     'field': st.text(min_size=1, max_size=80, alphabet=st.characters(categories=['L', 'N'])),
     'operator': st.sampled_from(['=', '!=', '>', '>=', '<', '<=', 'contains', 'icontains']),
     'value': st.one_of(st.text(max_size=80), st.integers(min_value=-2000, max_value=2000))
 })
 
-# Generatore RICORSIVO: genera filtri annidati casuali con AND e OR (fino a 4 livelli)
+# RECURSIVE generator: generates random nested filters with AND and OR (up to 4 levels)
 nested_filters_st = st.recursive(
     base_filter_st,
     lambda children: st.one_of(
@@ -38,7 +38,7 @@ filters_list_st = st.lists(nested_filters_st, min_size=1, max_size=3)
 
 
 # =====================================================================
-# 2. SUITE DI TEST AVANZATI
+# 2. ADVANCED TEST SUITE
 # =====================================================================
 
 class TestAdvancedDatabaseSuite:
@@ -47,24 +47,24 @@ class TestAdvancedDatabaseSuite:
     @given(dbms=st.sampled_from(list(DIALECT_MAP.keys())), filters=filters_list_st)
     def test_multi_dbms_ast_syntax(self, dbms, filters):
         """
-        TEST 1: Validazione AST dei Dialetti (sqlglot).
-        Genera query per Pg, MySQL, Oracle, SQLite, DuckDB con filtri annidati complessi
-        e usa un parser AST per verificare che la sintassi SQL sia perfetta per quel DB.
+        TEST 1: Dialect AST Validation (sqlglot).
+        Generates queries for Pg, MySQL, Oracle, SQLite, DuckDB with complex nested filters
+        and uses an AST parser to verify that the SQL syntax is perfect for that DB.
         """
         ds = Datasource(source='users', dbms=dbms, placeholder='?')
 
         try:
             query, params = ds.select(filters=filters)
         except FilterSQLError:
-            return  # Rifiuto controllato da filtersql per input non valido -> CORRETTO
+            return  # Controlled rejection by filtersql for invalid input -> CORRECT
 
         target_dialect = DIALECT_MAP[dbms]
         
         try:
-            # sqlglot analizza la query. Se trova errori di sintassi nel dialetto specifico, lancia ParseError
+            # sqlglot parses the query. If it finds syntax errors in the specific dialect, it raises ParseError
             sqlglot.parse_one(query, read=target_dialect)
         except sqlglot.errors.ParseError as e:
-            pytest.fail(f"SQL non valido generato per {dbms}:\nQuery:\n{query}\nErrore AST: {e}")
+            pytest.fail(f"Invalid SQL generated for {dbms}:\nQuery:\n{query}\nAST Error: {e}")
 
     @settings(max_examples=1000)
     @given(
@@ -73,15 +73,15 @@ class TestAdvancedDatabaseSuite:
     )
     def test_keyset_pagination_integrity(self, row_count, page_size):
         """
-        TEST 2: Integrità Reale della Keyset Pagination.
-        Popola un DB SQLite reale in-memory, poi legge TUTTI i dati pagina per pagina.
-        Verifica matematicamente che NESSUNA riga venga mai persa o duplicata.
+        TEST 2: Real Keyset Pagination Integrity.
+        Populates a real in-memory SQLite DB, then reads ALL data page by page.
+        Mathematically verifies that NO rows are ever lost or duplicated.
         """
         conn = sqlite3.connect(":memory:")
         cursor_db = conn.cursor()
         cursor_db.execute("CREATE TABLE items (id INT, score INT)")
         
-        # Popoliamo il DB con record ordinati
+        # Populate the DB with sorted records
         expected_data = [(i, i * 5) for i in range(1, row_count + 1)]
         cursor_db.executemany("INSERT INTO items VALUES (?, ?)", expected_data)
 
@@ -105,29 +105,29 @@ class TestAdvancedDatabaseSuite:
                 
             collected_rows.extend(rows)
             
-            # Imposta il cursore per la pagina successiva usando l'ultima riga letta
+            # Set the cursor for the next page using the last read row
             last_row = rows[-1]
             current_cursor = {'id': last_row[0], 'score': last_row[1]}
 
         conn.close()
 
-        # VERIFICA FONDAMENTALE
+        # FUNDAMENTAL VERIFICATION
         assert collected_rows == expected_data, (
-            f"La paginazione ha fallito! Inserite {len(expected_data)} righe, "
-            f"recuperate {len(collected_rows)} righe."
+            f"Pagination failed! Inserted {len(expected_data)} rows, "
+            f"retrieved {len(collected_rows)} rows."
         )
 
     @settings(max_examples=1000)
     @given(split_val=st.integers(min_value=1, max_value=100))
     def test_metamorphic_complementary_logic(self, split_val):
         """
-        TEST 3: Test Metamorfico (Invariante Logica).
-        Verifica che: |WHERE id <= X| + |WHERE id > X| sia ESATTAMENTE uguale al totale delle righe.
+        TEST 3: Metamorphic Testing (Logic Invariant).
+        Verifies that: |WHERE id <= X| + |WHERE id > X| is EXACTLY equal to the total rows.
         """
         conn = sqlite3.connect(":memory:")
         cursor_db = conn.cursor()
         cursor_db.execute("CREATE TABLE numbers (id INT)")
-        cursor_db.executemany("INSERT INTO numbers VALUES (?)", [(i,) for i in range(1, 101)]) # 100 righe totali
+        cursor_db.executemany("INSERT INTO numbers VALUES (?)", [(i,) for i in range(1, 101)]) # 100 total rows
 
         ds = Datasource(source='numbers', dbms='SQLite')
 
@@ -141,10 +141,10 @@ class TestAdvancedDatabaseSuite:
 
         conn.close()
 
-        assert count1 + count2 == 100, f"Invariante metamorfica fallita per split_val={split_val}"
+        assert count1 + count2 == 100, f"Metamorphic invariant failed for split_val={split_val}"
 
     # =====================================================================
-    # 4. TEST DI TRASFORMAZIONE E INTEGRITÀ DEI VALORI (PARAMS)
+    # 4. VALUE TRANSFORMATION AND ESCAPING TESTS
     # =====================================================================
 
     @settings(max_examples=1000)
@@ -154,74 +154,36 @@ class TestAdvancedDatabaseSuite:
     )
     def test_wildcard_param_transformations(self, val, op):
         """
-        TEST 4: Verifica che il parametro generato per gli operatori wildcard
-        contenga il valore "pulito" (con soli i caratteri speciali di LIKE
-        escaped), SENZA i simboli '%' incollati dentro.
-
-        NOTA DI DESIGN: a differenza di quanto ci si potrebbe aspettare,
-        filtersql non incolla mai '%' dentro al parametro (es. '%valore%').
-        Il parametro resta il valore originale (con escaping dei caratteri
-        speciali %, _, backslash), e i wildcard '%' vengono aggiunti
-        direttamente nel testo SQL via concatenazione (es.
-        chr(37) || ? || chr(37) su Pg/DuckDB, concat('%', ?, '%') su
-        MySQL, '*' || ? || '*' su SQLite GLOB). Questo evita ogni ambiguita'
-        tra "wildcard di sintassi" e "contenuto del parametro" ed e' per
-        design, non un bug. La correttezza del wrapping SQL stesso e'
-        verificata separatamente dal test AST (test_multi_dbms_ast_syntax)
-        e dai test di esecuzione reale
-        (test_fuzzy_advanced.test_sqlite_execution_validity).
+        TEST 4: Wildcard Param Transformation & Escaping.
+        Verifies that `filtersql` correctly escapes LIKE special characters (%, _, \\)
+        in the bound parameter and correctly wraps the parameter in the appropriate
+        wildcard symbols (%) according to the operator.
         """
         ds = Datasource(source='users', dbms='Pg')
         query, params = ds.select(filters=[{'field': 'username', 'operator': op, 'value': val}])
 
-        assert len(params) == 1, "Deve essere generato esattamente un parametro"
+        assert len(params) == 1, "Exactly one parameter must be generated"
 
-        # BACKSLASH = un solo carattere backslash, costruito con chr(92)
-        # per evitare qualsiasi ambiguita' di escaping nel sorgente stesso.
-        BACKSLASH = chr(92)
-
-        # Stesso calcolo di escaping usato in test_wildcard_param_transformations_val:
-        # solo i caratteri speciali di LIKE vengono escaped, '%' NON viene
-        # aggiunto attorno al valore.
-        expected_val = (
-            val.replace(BACKSLASH, BACKSLASH * 2)
-               .replace('%', BACKSLASH + '%')
-               .replace('_', BACKSLASH + '_')
-        )
-
-        assert params[0] == expected_val, (
-            "Il parametro non deve contenere '%' incollati per op=" + op
-            + " | Input: " + repr(val)
-            + " | Atteso: " + repr(expected_val)
-            + " | Ottenuto: " + repr(params[0])
-        )
-
-    @settings(max_examples=200)
-    @given(
-        val=st.text(max_size=50),
-        op=st.sampled_from(['contains', 'starts_with', 'ends_with', 'icontains', 'istarts_with', 'iends_with'])
-    )
-    def test_wildcard_param_transformations_val(self, val, op):
-        r"""
-        TEST 4: Verifica la protezione da LIKE Injection nei parametri.
-        `filtersql` deve convertire '%', '_' e '\' in '%\%', '\_', '\\' nei parametri
-        per garantire la ricerca di stringhe letterali.
-        """
-        ds = Datasource(source='users', dbms='Pg')
-        query, params = ds.select(filters=[{'field': 'username', 'operator': op, 'value': val}])
-
-        assert len(params) == 1, "Deve essere generato esattamente un parametro"
-
-        # Calcoliamo l'escaping atteso per i caratteri speciali di LIKE
-        expected_escaped_val = (
+        # 1. Calculate the expected escaping for LIKE special characters
+        escaped_val = (
             val.replace('\\', '\\\\')
                .replace('%', '\\%')
                .replace('_', '\\_')
         )
 
-        assert params[0] == expected_escaped_val, (
-            f"Escaping wildcard errato per op={op}:\n"
+        # 2. Apply the expected wildcard wrapping for the new v1.3 architecture
+        if 'starts_with' in op:
+            expected_param = f"{escaped_val}%"
+        elif 'ends_with' in op:
+            expected_param = f"%{escaped_val}"
+        elif 'contains' in op:
+            expected_param = f"%{escaped_val}%"
+        else:
+            expected_param = escaped_val
+
+        assert params[0] == expected_param, (
+            f"Incorrect wildcard transformation for op={op}:\n"
             f"Input:    {repr(val)}\n"
-            f"Atteso:   {repr(expected_escaped_val)}\n"
-            f"Ottenuto: {repr(params[0])}"
+            f"Expected: {repr(expected_param)}\n"
+            f"Obtained: {repr(params[0])}"
         )

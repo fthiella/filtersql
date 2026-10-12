@@ -5,7 +5,7 @@ import os
 import unicodedata
 
 DBMS_MAP = {
-    'SQLite': {
+    'sqlite': {
         "placeholder":         '?',
         "quote":               '"',
         "search_map": {
@@ -16,23 +16,22 @@ DBMS_MAP = {
             '<':                '{col} < {param}',
             '<=':               '{col} <= {param}',
             # case sensitive
-            'starts_with':      '{col} glob {param} || \'*\'',
-            'ends_with':        '{col} glob \'*\' || {param}',
-            'contains':         '{col} glob \'*\' || {param} || \'*\'',
-            'not_starts_with':  '{col} not glob {param} || \'*\'',
-            'not_ends_with':    '{col} not glob \'*\' || {param}',
-            'not_contains':     '{col} not glob \'*\' || {param} || \'*\'',
+            'starts_with':      '{col} glob {param}',
+            'ends_with':        '{col} glob {param}',
+            'contains':         '{col} glob {param}',
+            'not_starts_with':  '{col} not glob {param}',
+            'not_ends_with':    '{col} not glob {param}',
+            'not_contains':     '{col} not glob {param}',
             # case insensitive
-            'istarts_with':     '{col} like {param} || \'%\'',
-            'iends_with':       '{col} like \'%\' || {param}',
-            'icontains':        '{col} like \'%\' || {param} || \'%\'',
-            'not_istarts_with': '{col} not like {param} || \'%\'',
-            'not_iends_with':   '{col} not like \'%\' || {param}',
-            'not_icontains':    '{col} not like \'%\' || {param} || \'%\'',
+            'istarts_with':     '{col} like {param}',
+            'iends_with':       '{col} like {param}',
+            'icontains':        '{col} like {param}',
+            'not_istarts_with': '{col} not like {param}',
+            'not_iends_with':   '{col} not like {param}',
+            'not_icontains':    '{col} not like {param}',
             # other
             'in':               '{col} in ({params})',
             'notin':            '{col} not in ({params})',
-            'reverse_in':       '{param} in ({cols})',
             'null':             '{col} is null',
             'notnull':          '{col} is not null',
             'between':          '{col} between {param1} and {param2}',
@@ -46,7 +45,7 @@ DBMS_MAP = {
         "like_escape": {"style": "backslash", "escape_char": "\\", "wildcards": ["%", "_"]},
         "glob_escape": {"style": "bracket", "wildcards": ["*", "?", "["]},
     },
-    'Pg': {
+    'pg': {
         "placeholder":         '%s',
         "quote":               '"',
         "search_map": {
@@ -57,26 +56,25 @@ DBMS_MAP = {
             '<':                '{col} < {param}',
             '<=':               '{col} <= {param}',
             # case sensitive
-            'starts_with':      '{col} like {param} || chr(37)',
-            'ends_with':        '{col} like chr(37) || {param}',
-            'contains':         '{col} like chr(37) || {param} || chr(37)',
-            'not_starts_with':  '{col} not like {param} || chr(37)',
-            'not_ends_with':    '{col} not like chr(37) || {param}',
-            'not_contains':     '{col} not like chr(37) || {param} || chr(37)',
+            'starts_with':      '{col} like {param}',
+            'ends_with':        '{col} like {param}',
+            'contains':         '{col} like {param}',
+            'not_starts_with':  '{col} not like {param}',
+            'not_ends_with':    '{col} not like {param}',
+            'not_contains':     '{col} not like {param}',
             # case insensitive
-            'istarts_with':     '{col} ilike {param} || chr(37)',
-            'iends_with':       '{col} ilike chr(37) || {param}',
-            'icontains':        '{col} ilike chr(37) || {param} || chr(37)',
-            'not_istarts_with': '{col} not ilike {param} || chr(37)',
-            'not_iends_with':   '{col} not ilike chr(37) || {param}',
-            'not_icontains':    '{col} not ilike chr(37) || {param} || chr(37)',
+            'istarts_with':     '{col} ilike {param}',
+            'iends_with':       '{col} ilike {param}',
+            'icontains':        '{col} ilike {param}',
+            'not_istarts_with': '{col} not ilike {param}',
+            'not_iends_with':   '{col} not ilike {param}',
+            'not_icontains':    '{col} not ilike {param}',
             # vectors
             'fts':              "{col} @@ websearch_to_tsquery('{lang}', {param})",
             'fts_query':        "to_tsvector('{lang}', coalesce({col}, '')) @@ websearch_to_tsquery('{lang}', {param})",
             # other
             'in':               '{col} in ({params})',
             'notin':            '{col} not in ({params})',
-            'reverse_in':       '{param} in ({cols})',
             'null':             '{col} is null',
             'notnull':          '{col} is not null',
             'between':          '{col} between {param1} and {param2}',
@@ -88,7 +86,7 @@ DBMS_MAP = {
         "limit": 'limit {length} offset {start}',
         "like_escape": {"style": "backslash", "escape_char": "\\", "wildcards": ["%", "_"]},
     },
-    'DuckDB': {
+    'duckdb': {
         "placeholder":         '?',
         "quote":               '"',
         "search_map": {
@@ -99,23 +97,22 @@ DBMS_MAP = {
             '<':                '{col} < {param}',
             '<=':               '{col} <= {param}',
             # case sensitive
-            'starts_with':      '{col} like {param} || chr(37)',
-            'ends_with':        '{col} like chr(37) || {param}',
-            'contains':         '{col} like chr(37) || {param} || chr(37)',
-            'not_starts_with':  '{col} not like {param} || chr(37)',
-            'not_ends_with':    '{col} not like chr(37) || {param}',
-            'not_contains':     '{col} not like chr(37) || {param} || chr(37)',
+            'starts_with':      '{col} like {param}',
+            'ends_with':        '{col} like {param}',
+            'contains':         '{col} like {param}',
+            'not_starts_with':  '{col} not like {param}',
+            'not_ends_with':    '{col} not like {param}',
+            'not_contains':     '{col} not like {param}',
             # case insensitive
-            'istarts_with':     '{col} ilike {param} || chr(37)',
-            'iends_with':       '{col} ilike chr(37) || {param}',
-            'icontains':        '{col} ilike chr(37) || {param} || chr(37)',
-            'not_istarts_with': '{col} not ilike {param} || chr(37)',
-            'not_iends_with':   '{col} not ilike chr(37) || {param}',
-            'not_icontains':    '{col} not ilike chr(37) || {param} || chr(37)',
+            'istarts_with':     '{col} ilike {param}',
+            'iends_with':       '{col} ilike {param}',
+            'icontains':        '{col} ilike {param}',
+            'not_istarts_with': '{col} not ilike {param}',
+            'not_iends_with':   '{col} not ilike {param}',
+            'not_icontains':    '{col} not ilike {param}',
             # other
             'in':               '{col} in ({params})',
             'notin':            '{col} not in ({params})',
-            'reverse_in':       '{param} in ({cols})',
             'null':             '{col} is null',
             'notnull':          '{col} is not null',
             'between':          '{col} between {param1} and {param2}',
@@ -138,26 +135,25 @@ DBMS_MAP = {
             '<':                '{col} < {param}',
             '<=':               '{col} <= {param}',
             # case sensitive (LIKE BINARY)
-            'starts_with':      '{col} like binary concat({param}, \'%\')',
-            'ends_with':        '{col} like binary concat(\'%\', {param})',
-            'contains':         '{col} like binary concat(\'%\', {param}, \'%\')',
-            'not_starts_with':  '{col} not like binary concat({param}, \'%\')',
-            'not_ends_with':    '{col} not like binary concat(\'%\', {param})',
-            'not_contains':     '{col} not like binary concat(\'%\', {param}, \'%\')',
+            'starts_with':      '{col} like binary {param}',
+            'ends_with':        '{col} like binary {param}',
+            'contains':         '{col} like binary {param}',
+            'not_starts_with':  '{col} not like binary {param}',
+            'not_ends_with':    '{col} not like binary {param}',
+            'not_contains':     '{col} not like binary {param}',
             # case insensitive (standard LIKE)
-            'istarts_with':     '{col} like concat({param}, \'%\')',
-            'iends_with':       '{col} like concat(\'%\', {param})',
-            'icontains':        '{col} like concat(\'%\', {param}, \'%\')',
-            'not_istarts_with': '{col} not like concat({param}, \'%\')',
-            'not_iends_with':   '{col} not like concat(\'%\', {param})',
-            'not_icontains':    '{col} not like concat(\'%\', {param}, \'%\')',
+            'istarts_with':     '{col} like {param}',
+            'iends_with':       '{col} like {param}',
+            'icontains':        '{col} like {param}',
+            'not_istarts_with': '{col} not like {param}',
+            'not_iends_with':   '{col} not like {param}',
+            'not_icontains':    '{col} not like {param}',
             # full text search
             'fts':              "match({col}) against({param} in boolean mode)",
             'fts_query':        "match({col}) against({param} in boolean mode)",
             # other
             'in':               '{col} in ({params})',
             'notin':            '{col} not in ({params})',
-            'reverse_in':       '{param} in ({cols})',
             'null':             '{col} is null',
             'notnull':          '{col} is not null',
             'between':          '{col} between {param1} and {param2}',
@@ -170,7 +166,7 @@ DBMS_MAP = {
         "like_escape": {"style": "backslash", "escape_char": "\\", "wildcards": ["%", "_"]},
         "literal_backslash_escapes": True,
     },
-    'Oracle': {
+    'oracle': {
         "placeholder":         '?',
         "quote":               '"',
         "search_map": {
@@ -181,23 +177,22 @@ DBMS_MAP = {
             '<':                '{col} < {param}',
             '<=':               '{col} <= {param}',
             # case sensitive
-            'starts_with':      '{col} like {param} || \'%\'',
-            'ends_with':        '{col} like \'%\' || {param}',
-            'contains':         '{col} like \'%\' || {param} || \'%\'',
-            'not_starts_with':  '{col} not like {param} || \'%\'',
-            'not_ends_with':    '{col} not like \'%\' || {param}',
-            'not_contains':     '{col} not like \'%\' || {param} || \'%\'',
+            'starts_with':      '{col} like {param}',
+            'ends_with':        '{col} like {param}',
+            'contains':         '{col} like {param}',
+            'not_starts_with':  '{col} not like {param}',
+            'not_ends_with':    '{col} not like {param}',
+            'not_contains':     '{col} not like {param}',
             # case insensitive - upper()
-            'istarts_with':     'upper({col}) like upper({param}) || \'%\'',
-            'iends_with':       'upper({col}) like \'%\' || upper({param})',
-            'icontains':        'upper({col}) like \'%\' || upper({param}) || \'%\'',
-            'not_istarts_with': 'upper({col}) not like upper({param}) || \'%\'',
-            'not_iends_with':   'upper({col}) not like \'%\' || upper({param})',
-            'not_icontains':    'upper({col}) not like \'%\' || upper({param}) || \'%\'',
+            'istarts_with':     'upper({col}) like upper({param})',
+            'iends_with':       'upper({col}) like upper({param})',
+            'icontains':        'upper({col}) like upper({param})',
+            'not_istarts_with': 'upper({col}) not like upper({param})',
+            'not_iends_with':   'upper({col}) not like upper({param})',
+            'not_icontains':    'upper({col}) not like upper({param})',
             # other
             'in':               '{col} in ({params})',
             'notin':            '{col} not in ({params})',
-            'reverse_in':       '{param} in ({cols})',
             'null':             '{col} is null',
             'notnull':          '{col} is not null',
             'between':          '{col} between {param1} and {param2}',
@@ -243,6 +238,13 @@ class Datasource:
     Values are always bound. Identifiers go through _quote (reads) or
     _quote_write_target (insert/update/delete keys). Tenant `scope` is
     enforced server-side and cannot be set from the payload.
+
+    `allowed_columns` is an exact allowlist of client identifiers.
+    None keeps the old behaviour. A collection, even empty, is closed:
+    columns, filters, order, cursors, group by and write keys must be
+    listed verbatim (no case folding). Scope columns are injected after
+    that check and do not have to be listed. SELECT * and raw are
+    refused while the list is active.
     """
 
     # Operators whose SQL pattern embeds wildcard characters (%, _, *, ?) around
@@ -265,19 +267,21 @@ class Datasource:
     })
 
     def __init__(
-        self, 
+        self,
         *,
         dbms: str = None,
         source: str = None,
         raw_source: bool = False,
         allow_raw_source: bool = False,
         allow_raw_fields: bool = False,
+        allowed_columns: set = None,
+        allowed_sources: set = None,
         order: list = None,
         limit: dict = None,
         scope: dict = None,
         direction: str = None,
         placeholder: str = None,
-        fts_language: str = None
+        fts_language: str = None,
     ):
         """
         Datasource initialization
@@ -309,6 +313,9 @@ class Datasource:
             for k in scope:
                 self._validate_bare_identifier(k)
         self.scope = scope or {}
+
+        self.allowed_columns = self._normalize_allowlist(allowed_columns, 'allowed_columns')
+        self.allowed_sources = self._normalize_allowlist(allowed_sources, 'allowed_sources')
 
         self.direction       = direction
         self.fts_language    = fts_language or 'english'
@@ -355,6 +362,7 @@ class Datasource:
         for x in columns:
             if isinstance(x, str):
                 # Simple column name
+                self._check_allowed_column(x)
                 parsed_columns.append(self._quote(x, quote_char))
             elif isinstance(x, dict):
                 field = x.get('field')
@@ -362,6 +370,10 @@ class Datasource:
                     raise ValidationError(f"Column dict missing 'field': {x}")
 
                 if x.get('raw', False):
+                    if self.allowed_columns is not None:
+                        raise ValidationError(
+                            "raw columns are not permitted when allowed_columns is set."
+                        )
                     if not self.allow_raw_fields:
                         raise ConfigurationError(
                             "raw columns/filters are disabled. Set allow_raw_fields=True to enable."
@@ -372,6 +384,7 @@ class Datasource:
                         raw_sql += f" as {self._quote(alias, quote_char)}"
                     parsed_columns.append(raw_sql)
                 else:
+                    self._check_allowed_column(field)
                     quoted = self._quote(field, quote_char)
                     alias = x.get('alias') or x.get('as')
                     if alias:
@@ -379,6 +392,12 @@ class Datasource:
                     parsed_columns.append(quoted)
             else:
                 raise ValidationError(f"Invalid column format: {x}")
+
+        if self.allowed_columns is not None and not parsed_columns:
+            raise ValidationError(
+                "columns must be specified explicitly when allowed_columns is set "
+                "(SELECT * is not allowed)."
+            )
 
         active_direction = direction or self.direction
         where_clause, where_values = self.where(filters=filters, direction=active_direction, cursor=cursor, order=active_order)
@@ -427,6 +446,8 @@ class Datasource:
             ])
 
         if group_by:
+            for col in group_by:
+                self._check_allowed_column(col)
             segments.extend([
                 "group by",
                 f"  " + ", ".join(self._quote(col, quote_char) for col in group_by)
@@ -455,7 +476,7 @@ class Datasource:
         if not values and not self.scope:
             raise ValidationError("insert() requires at least one value")
 
-        if returning and self.dbms != 'Pg':
+        if returning and self.dbms != 'pg':
             raise ValidationError(f"returning is not supported by {self.dbms}")
 
         if values and not isinstance(values, dict):
@@ -472,6 +493,7 @@ class Datasource:
         if values:
             for k in values:
                 self._validate_bare_identifier(k)
+                self._check_allowed_column(k)
             self._check_scope_collision(values.keys())
 
         final_values = {**(values or {}), **self.scope}
@@ -496,6 +518,7 @@ class Datasource:
         ]
 
         if returning:
+            self._check_allowed_column(returning)
             ret_col = self._quote(returning, quote_char)
             segments.append(f"returning {ret_col}")
 
@@ -515,6 +538,7 @@ class Datasource:
 
         for k in values:
             self._validate_bare_identifier(k)
+            self._check_allowed_column(k)
         self._check_scope_collision(values.keys())
 
         # 'id' identifies the row(s) to update on this same single table -
@@ -523,6 +547,7 @@ class Datasource:
         # reintroduced into the WHERE clause under a different spelling.
         for k in id:
             self._validate_bare_identifier(k)
+            self._check_allowed_column(k)
         self._check_scope_collision(id.keys())
 
         source = self._resolve_source()
@@ -563,6 +588,7 @@ class Datasource:
 
         for k in id:
             self._validate_bare_identifier(k)
+            self._check_allowed_column(k)
         self._check_scope_collision(id.keys())
 
         my_filters = [{'field': k, 'operator': '=', 'value': v} for k, v in id.items()]
@@ -612,8 +638,7 @@ class Datasource:
             out.append(tail)
         return ''.join(out)
 
-    @staticmethod
-    def _validate_order(order_list: list | None) -> list:
+    def _validate_order(self, order_list: list | None) -> list:
         if order_list is None:
             return []
         if not isinstance(order_list, list):
@@ -621,6 +646,7 @@ class Datasource:
         for item in order_list:
             if not isinstance(item, dict) or not item.get('field'):
                 raise ValidationError(f"Each item in 'order' must be a dict with a 'field' key: {item!r}")
+            self._check_allowed_column(item['field'])
         return order_list
 
     def where(self, *, filters: list = None, direction: str = None, cursor: dict = None, order: list = None) -> tuple[str, list]:
@@ -672,6 +698,10 @@ class Datasource:
                 )
 
         scope_filters = [{'field': k, 'operator': '=', 'value': v} for k, v in self.scope.items()]
+        # Client filters only. Scope is server-owned and is not part of
+        # the allowlist, otherwise a tenant key would have to be listed
+        # and the client could name it too.
+        self._check_allowed_filters(filters)
         all_filters = scope_filters + list(filters or [])
 
         if all_filters or cursor:
@@ -684,12 +714,12 @@ class Datasource:
         """
         if not filters:
             return "", []
+        self._check_allowed_filters(filters)
         return self._build_filter_group(filters, join='and')
 
     def _build_where(self, *, filters: list, direction: str, dbms: str, cursor: dict = None, order: list = None) -> tuple[str, list]:
         """Build a WHERE clause from filters. Returns (clause, values)."""
 
-        # --- 2. Filter Format Validation ("Fail Fast") ---
         for item in filters:
             if not isinstance(item, dict):
                 raise ValidationError(f"Invalid filter format. Expected dict, got: {type(item).__name__} ({item})")
@@ -697,29 +727,18 @@ class Datasource:
         m_where = []
         m_data = []
 
-        # --- 3. Build Cursor Keyset Pagination ---
         if cursor and direction:
             quote = DBMS_MAP[dbms]['quote']
 
-            # field → its declared order direction (missing = 'asc', matching
-            # historical behavior so cursor pagination doesn't silently drop
-            # its WHERE condition when `order` isn't configured for a field).
             order_map = {
                 o['field']: o.get('order', 'asc')
                 for o in (order or [])
             }
 
             if direction == 'seek':
-                cursor_items = list(cursor.items())
-            else:
-                cursor_items = [
-                    (o['field'], cursor[o['field']])
-                    for o in (order or [])
-                ]
-
-            if direction == 'seek':
                 conditions = []
-                for k, v in cursor_items:
+                for k, v in cursor.items():
+                    self._check_allowed_column(k)
                     conditions.append(
                         f"{self._quote(k, quote)} = {self.placeholder}"
                     )
@@ -727,6 +746,11 @@ class Datasource:
                 m_where.append(' and '.join(conditions))
             else:
                 # Proper multi-column keyset with per-column ASC/DESC awareness
+                cursor_items = [
+                    (o['field'], cursor[o['field']])
+                    for o in (order or [])
+                ]
+
                 or_conditions = []
                 for i in reversed(range(len(cursor_items))):
                     and_parts = []
@@ -751,10 +775,8 @@ class Datasource:
                     or_conditions.append('(' + ' and '.join(and_parts) + ')')
                 m_where.append(' or '.join(or_conditions))
 
-        # --- 4. Build Search Conditions ---
         s_sql, s_data = self._build_filter_group(filters, join='and')
 
-        # --- 5. Combine ---
         q_where = []
         if m_where:
             q_where.append('(' + ' and '.join(m_where) + ')')
@@ -815,9 +837,24 @@ class Datasource:
         value_type = f.get('value_type')
         is_raw     = f.get('raw', False)
 
-
         if not field:
             raise ValidationError(f"Filter is missing required 'field' key: {f}")
+
+        # SQL three-valued logic: `col = NULL` is never true. Only the
+        # dedicated operators express nullness. None inside IN/BETWEEN is
+        # the same footgun (`IN (NULL)` does not match NULL rows).
+        if operator not in ('null', 'notnull'):
+            if operator in ('in', 'notin', 'between') and isinstance(value, (list, tuple)):
+                if any(v is None for v in value):
+                    raise ValidationError(
+                        f"Operator '{operator}' does not accept None. "
+                        f"Use 'null' or 'notnull' to test for null."
+                    )
+            elif value is None:
+                raise ValidationError(
+                    f"Operator '{operator}' does not accept None. "
+                    f"Use 'null' or 'notnull' to test for null."
+                )
 
         sql_frag = self._build_condition(
             col=field,
@@ -867,10 +904,14 @@ class Datasource:
         value_type: str | None = None,
         raw: bool = False
     ) -> str:
+        if raw and self.allowed_columns is not None:
+            raise ValidationError(
+                "raw filters are not permitted when allowed_columns is set."
+            )
         if raw and not self.allow_raw_fields:
             raise ConfigurationError("raw columns/filters are disabled. Set allow_raw_fields=True to enable.")
 
-        if searchcriteria in ['fts', 'fts_query'] and self.dbms not in ['Pg', 'mysql']:
+        if searchcriteria in ['fts', 'fts_query'] and self.dbms not in ['pg', 'mysql']:
             raise ValidationError(f"FTS operator not supported for {self.dbms}")
 
         if searchcriteria not in DBMS_MAP[self.dbms]["search_map"]:
@@ -880,13 +921,6 @@ class Datasource:
         raw_statement = DBMS_MAP[self.dbms]["search_map"][searchcriteria]
         quote_char = DBMS_MAP[self.dbms]["quote"]
 
-        if searchcriteria == 'reverse_in':
-            col_list = [c.strip() for c in str(col).split(',') if c.strip()]
-            if not col_list:
-                raise ValidationError(f"reverse_in requires at least one column, got: {col!r}")
-            parsed_cols = [self._quote(c, quote_char) for c in col_list]
-            return raw_statement.format(param=self.placeholder, cols=', '.join(parsed_cols))
-
         if raw:
             col_expr = str(col)
             param_expr = self.placeholder
@@ -895,7 +929,7 @@ class Datasource:
             param_expr = self.placeholder
             # Cast only on Pg JSONB paths. 'text' is the JSONB default (no cast).
             if (
-                self.dbms == 'Pg'
+                self.dbms == 'pg'
                 and value_type
                 and str(value_type).strip().lower() not in ('text',)
             ):
@@ -964,51 +998,50 @@ class Datasource:
         if operator not in self._WILDCARD_OPS:
             return None
         dialect_cfg = DBMS_MAP[self.dbms]
-        if self.dbms == 'SQLite' and operator in self._CASE_SENSITIVE_WILDCARD_OPS:
+        if self.dbms == 'sqlite' and operator in self._CASE_SENSITIVE_WILDCARD_OPS:
             return dialect_cfg.get('glob_escape')
         return dialect_cfg.get('like_escape')
 
     def _escape_wildcard_value(self, value, operator: str):
         """
-        Escapes literal wildcard characters (%, _, *, ?, [) in a user-supplied
-        value so that e.g. searching for "50% off" matches the literal string
-        instead of "%" being interpreted as a pattern wildcard.
-
-        Only changes values intended for wildcard operators
-        (contains, starts_with, icontains, etc.)
+        Escapes literal wildcard characters in a user-supplied value,
+        then wraps the value in the appropriate wildcard markers (%, *) 
+        for the given operator.
         """
         if value is None or operator not in self._WILDCARD_OPS:
             return value
 
         cfg = self._wildcard_escape_config(operator)
-        if not cfg:
-            return value
+        escaped_value = str(value)
 
-        value = str(value)
-        wildcard_set = set(cfg['wildcards'])
+        if cfg:
+            wildcard_set = set(cfg['wildcards'])
+            if cfg['style'] == 'backslash':
+                esc = cfg['escape_char']
+                out = []
+                for ch in escaped_value:
+                    if ch == esc or ch in wildcard_set:
+                        out.append(esc)
+                    out.append(ch)
+                escaped_value = ''.join(out)
+            elif cfg['style'] == 'bracket':
+                # GLOB-style: wrapping a metacharacter in brackets
+                out = []
+                for ch in escaped_value:
+                    out.append(f'[{ch}]' if ch in wildcard_set else ch)
+                escaped_value = ''.join(out)
 
-        # Built as a single pass over the original characters rather than
-        # chained str.replace() calls - chaining rescans text we already
-        # inserted (e.g. escaping '*' -> '[*]' then a later pass over '['
-        # would re-escape the bracket it just introduced).
-        if cfg['style'] == 'backslash':
-            esc = cfg['escape_char']
-            out = []
-            for ch in value:
-                if ch == esc or ch in wildcard_set:
-                    out.append(esc)
-                out.append(ch)
-            return ''.join(out)
+        is_glob = (self.dbms == 'sqlite' and operator in self._CASE_SENSITIVE_WILDCARD_OPS)
+        wc = '*' if is_glob else '%'
 
-        elif cfg['style'] == 'bracket':
-            # GLOB-style: wrapping a metacharacter in its own single-char
-            # bracket class neutralizes it (e.g. '*' -> '[*]').
-            out = []
-            for ch in value:
-                out.append(f'[{ch}]' if ch in wildcard_set else ch)
-            return ''.join(out)
+        if operator in {'starts_with', 'istarts_with', 'not_starts_with', 'not_istarts_with'}:
+            return f"{escaped_value}{wc}"
+        elif operator in {'ends_with', 'iends_with', 'not_ends_with', 'not_iends_with'}:
+            return f"{wc}{escaped_value}"
+        elif operator in {'contains', 'icontains', 'not_contains', 'not_icontains'}:
+            return f"{wc}{escaped_value}{wc}"
 
-        return value
+        return escaped_value
 
     def _wildcard_escape_clause(self, operator: str) -> str:
         """
@@ -1129,6 +1162,77 @@ class Datasource:
 
         return canonical
 
+    @staticmethod
+    def _normalize_allowlist(value, name: str):
+        """Validates an allowlist argument and returns it as a frozenset (or None)."""
+        if value is None:
+            return None
+        if not isinstance(value, (set, frozenset, list, tuple)):
+            raise ConfigurationError(
+                f"Expected set/list/tuple for '{name}', got {type(value).__name__}"
+            )
+        if not all(isinstance(c, str) and c for c in value):
+            raise ConfigurationError(f"'{name}' entries must be non-empty strings")
+        return frozenset(value)
+
+    def _check_allowed_source(self) -> None:
+        """
+        Raises if `allowed_sources` is set and the configured source is not in it.
+        Exact string match (no case folding, no schema inference): list
+        'public.users' if that is what the payload sends. Applies to raw
+        sources too, where the whole source string must be listed.
+        """
+        if self.allowed_sources is None:
+            return
+        if self.source not in self.allowed_sources:
+            raise ValidationError(
+                f"Source {self.source!r} is not in allowed_sources."
+            )
+
+    def _check_allowed_column(self, name: str) -> None:
+        """
+        Raises if `allowed_columns` is set and `name` is not in it.
+
+        Match is exact, after no normalization. Case folding would treat
+        "Email" and "email" as the same column, and on Postgres they are
+        not. Dialects that fold unquoted names still reject a spelling
+        that was not listed.
+        """
+        if self.allowed_columns is None:
+            return
+        if name not in self.allowed_columns:
+            raise ValidationError(
+                f"Column {name!r} is not in allowed_columns."
+            )
+
+    def _check_allowed_filters(self, filters, _depth: int = 0) -> None:
+        """
+        Walk a client filter tree and apply the column allowlist.
+
+        Does not see scope filters. `raw` is rejected outright: the
+        string is spliced into the query, so it is not a column name
+        that can be allowlisted.
+        """
+        if self.allowed_columns is None or not filters:
+            return
+        if _depth > MAX_FILTER_DEPTH:
+            raise ValidationError(
+                f"Filter groups nested deeper than {MAX_FILTER_DEPTH}."
+            )
+        for item in filters:
+            if not isinstance(item, dict):
+                continue
+            if 'or' in item and isinstance(item['or'], list):
+                self._check_allowed_filters(item['or'], _depth + 1)
+            elif 'and' in item and isinstance(item['and'], list):
+                self._check_allowed_filters(item['and'], _depth + 1)
+            elif item.get('raw'):
+                raise ValidationError(
+                    "raw filters are not permitted when allowed_columns is set."
+                )
+            elif isinstance(item.get('field'), str):
+                self._check_allowed_column(item['field'])
+
     def _quote_write_target(self, name: str, quote: str) -> str:
         """Validates `name` as a bare identifier, then quotes it."""
         return self._quote(self._validate_bare_identifier(name), quote)
@@ -1168,7 +1272,7 @@ class Datasource:
         Cosmetic whitespace around operators is trimmed from keys.
         Trailing operators with no key raise InvalidIdentifierError.
         """
-        if self.dbms != 'Pg' or '->' not in name:
+        if self.dbms != 'pg' or '->' not in name:
             return name, []
 
         parts = _JSONB_OP_RE.split(name)
@@ -1282,6 +1386,8 @@ class Datasource:
                     dbms='Pg'
                 )
         """
+        self._check_allowed_source()
+
         if self.raw_source:
             if not self.allow_raw_source:
                 raise ConfigurationError("raw_source is disabled. Set allow_raw_source=True to enable.")
@@ -1315,6 +1421,7 @@ class Datasource:
 
 def filtersql(payload=None, dbms=None, scope=None, raw_source=False,
               allow_raw_source=False, allow_raw_fields=False,
+              allowed_columns=None, allowed_sources=None,
               placeholder=None, fts_language=None, **kwargs) -> tuple[str, list]:
     if payload is not None and not isinstance(payload, dict):
         raise ValidationError(f"Expected dict for 'payload', got {type(payload).__name__}")
@@ -1340,7 +1447,8 @@ def filtersql(payload=None, dbms=None, scope=None, raw_source=False,
         )
 
     for key in ['raw_source', 'allow_raw_source', 'allow_raw_fields',
-                'placeholder', 'dbms', 'scope', 'fts_language']:
+                'placeholder', 'dbms', 'scope', 'fts_language',
+                'allowed_columns', 'allowed_sources']:
         if key in data:
             raise ValidationError(f"'{key}' is a server-side configuration flag and cannot be set from the payload.")
 
@@ -1350,6 +1458,8 @@ def filtersql(payload=None, dbms=None, scope=None, raw_source=False,
         raw_source=raw_source,
         allow_raw_source=allow_raw_source,
         allow_raw_fields=allow_raw_fields,
+        allowed_columns=allowed_columns,
+        allowed_sources=allowed_sources,
         order=data.get('order'),
         limit=data.get('limit'),
         scope=scope,

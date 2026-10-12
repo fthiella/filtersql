@@ -1,6 +1,6 @@
-# filtersql JSON Payload Specification (v1.2.7)
+# filtersql JSON Payload Specification (v1.3.0)
 
-**Version**: 1.2.7
+**Version**: 1.3.0
 
 This document defines the formal, language-agnostic JSON payload specification for **filtersql**. Any implementation of this protocol (whether written in Python, Node.js, Go, Rust, or any other language) must accept and validate payloads conforming to this standard.
 
@@ -90,14 +90,24 @@ The `filters` array serves as the collection point for constraints. By default, 
 | `istarts_with`, `not_istarts_with`| Prefix match / exclusion (Case-Insensitive)| `string` | String prefix matching |
 | `iends_with`, `not_iends_with` | Suffix match / exclusion (Case-Insensitive) | `string` | String suffix matching |
 | `null`, `notnull` | Emptiness evaluations | Omitted | `IS NULL` / `IS NOT NULL` |
-| `reverse_in` | Constant scanning across columns | Scalar | `? IN (col1, col2)` |
 | `regexp`, `not_regexp` | Regular expression / exclusion (Case-Sensitive) | `string` | Native Regex tokens (`~`, `!~`, `regexp_like`) |
 | `iregexp`, `not_iregexp` | Regular expression / exclusion (Case-Insensitive) | `string` | Native Regex tokens (`~*`, `!~*`, etc.) |
 | `fts`, `fts_query` | Full-Text Search processing | `string` | `@@ websearch_to_tsquery` or `MATCH AGAINST` |
 
-For `reverse_in`, the field is a comma-separated list of column names, and value is a scalar.
-
 A scalar value is also accepted for `in`/`notin` and treated as a single-element list.
+
+**Pattern operators and bound values**. For `contains`, `starts_with`, `ends_with` and their `i*` / `not_*`
+variants, the wildcard markers are part of the bound value, not the SQL text.
+A payload `{"operator": "icontains", "value": "foo"}` produces a bound value of `"%foo%"` (with literal `%` / `_` in `foo` escaped). An implementation is free to generate the pattern
+differently in the SQL, but the value passed to the driver should follow this convention
+so that callers can reliably read, log, or replay the `values` list.
+
+#### Null values
+`col = NULL` is never true in SQL, so a `None`/`null` value is rejected
+(`ValidationError`) for every operator except `null` and `notnull`. This
+includes a missing `value` on an operator that needs one, and a `null`
+element inside the array of `in`, `notin` or `between`. Test for nullness
+with `{"operator": "null"}` / `{"operator": "notnull"}`.
 
 `fts` is available on PostgreSQL and MySQL. `fts_query` is available on PostgreSQL only. Using either on an unsupported dialect raises `ValidationError`.
 
@@ -145,12 +155,9 @@ To execute high-efficiency pagination over substantial dataset windows
 without resorting to performance-degrading `OFFSET` syntax, the payload
 implements **Keyset Pagination** via `cursor` and `direction`.
 
-If `cursor` is provided, `direction` must also be provided - a cursor
-without a direction is a `ValidationError`.
-
-`direction` may be provided without `cursor`. In that case it only
-inverts `ORDER BY`, which is useful for a "prev page" navigation where
-the cursor isn't yet known.
+`direction` may be provided without `cursor` — in that case it only inverts `ORDER BY`
+(useful for a "prev page" navigation where the cursor isn't yet known). If `cursor`
+is provided, `direction` becomes required — a `cursor` without a direction is a `ValidationError`.
 
 #### Properties:
 * `cursor` (`object`): A flat dictionary mapping field tracking names to their last-seen tracking metric states. Supports single or multi-column coordinates.
@@ -224,12 +231,14 @@ and must never be read from the payload.
 
 | Parameter | Description |
 | :--- | :--- |
-| `dbms` | SQL dialect: `'Pg'`, `'SQLite'`, `'mysql'`, `'DuckDB'`, `'Oracle'`. Case-insensitive. |
+| `dbms` | SQL dialect: `'pg'`, `'sqlite'`, `'mysql'`, `'duckdb'`, `'oracle'`. Case-insensitive. |
 | `placeholder` | Parameter marker used in generated SQL: `%s` (Pg/MySQL), `?` (SQLite/DuckDB/Oracle), or a custom string. |
 | `scope` | Dict of `field: value` conditions applied to every operation. Used for multi-tenant filtering. Server-side only. |
 | `fts_language` | Language name passed to `websearch_to_tsquery` (PostgreSQL only, default: `'english'`). |
 | `allow_raw_fields` | If `false`, payloads containing `raw: true` raise `ConfigurationError`. |
 | `allow_raw_source` / `raw_source` | Enable a raw subquery as `source`. Must be explicitly opted in. |
+| `allowed_columns` | Exact-match allowlist of every column a client may reference (`columns`, `filters`, `having`, `order`, `group_by`, `cursor`, `returning`, keys of `values` and `id`). No normalization. While set, `SELECT *` and `raw` are refused. Scope columns need not be listed. `None` = unrestricted; an empty collection allows nothing. |
+| `allowed_sources` | Exact-match allowlist for `source`, checked on every action (raw sources included). Same `None` / empty semantics. |
 
 The `filtersql()` convenience function rejects any payload that
 contains one of these keys, to prevent a client from escalating its
@@ -255,36 +264,34 @@ This makes the comparison below reliable, and puts the responsibility
 for canonical form on the schema, not on the request.
 
 This restriction is what makes the `scope` collision check reliable.
-`scope` keys are compared against `values`/`id` keys by NFC + casefold
-string match. If a client could reference the same physical column
-under a different spelling - `users.tenant_id`, `tenant_id` with
-trailing whitespace, `tenant_id` in NFD form - the check would be
-defeatable. By rejecting those spellings at the door, the check has
-no gap to close.
+`scope` keys are compared against these keys by case-insensitive string
+match, and the check would be defeatable if a client could reference
+the same physical column under a different spelling - for example
+`users.tenant_id`, or `tenant_id` with a trailing space, both of which
+normalize to the same column in some dialects.
 
 To filter rows by a JSONB path or a qualified name, use `filters` in
 `select()`. The `id` parameter is for primary-key lookup only.
 
 ```json
-// Accepted - normal identifier, space inside the name
+// Accepted - the scope collision check works on these
 {
   "action": "update",
-  "source": "invoices",
+  "source": "users",
   "id":     { "id": 42 },
-  "values": { "qta totale": 100, "città": "Milano" }
+  "values": { "email": "new@example.com" }
 }
 ```
 
 ```json
-// Rejected - trailing whitespace
+// Rejected - qualified, contains a dot
 {
   "action": "update",
-  "source": "invoices",
-  "id":     { "id": 42 },
-  "values": { "tenant_id ": 99 }
+  "source": "users",
+  "id":     { "users.id": 42 },
+  "values": { "email": "new@example.com" }
 }
 ```
-
 ---
 
 ## 3. JSON Schema Specification (Draft 7)

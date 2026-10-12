@@ -34,6 +34,7 @@ Supports PostgreSQL, SQLite, MySQL, DuckDB and Oracle.
 - **Language-agnostic** - Clean JSON protocol, perfect for REST APIs and frontend applications
 - **High-performance pagination** - Keyset (cursor-based) pagination, avoiding slow `OFFSET` queries
 - **AI/LLM friendly** - Designed for structured output from large language models
+- **Server-side allowlists** - constrain which columns and sources a client can name, exact-match, no normalization
 
 ## Why filtersql?
 
@@ -76,13 +77,13 @@ select
 from
   "users"
 where
-  ("name" like '%' || ? || '%' escape '\')
+  ("name" like ? escape '\')
 ```
 
 with values:
 
 ```JSON
-["john"]
+["%john%"]
 ```
 
 ---
@@ -124,13 +125,13 @@ print(query)
 # from
 #   "users"
 # where
-#   ("first_name" like '%' || ? || '%' escape '\' and "last_name" like '%' || ? || '%' escape '\')
+#   ("first_name" like ? escape '\' and "last_name" like ? escape '\')
 # order by
 #   "first_name" asc
 # limit 0, 10
 
 print(values)
-# ['John', 'Smith']
+# ['%John%', '%Smith%']
 ```
 
 ---
@@ -185,7 +186,7 @@ filters = [
         {'field': 'last_name',  'operator': 'icontains', 'value': 'john'},
     ]},
 ]
-# → "status" = ? AND ("first_name" like '%'||?||'%' escape '\' OR "last_name" like '%'||?||'%' escape '\')
+# → "status" = ? AND ("first_name" like ? escape '\' OR "last_name" like ? escape '\')
 ```
 
 ### Nesting
@@ -228,14 +229,55 @@ query, values = ds.insert(values={'title': 'New doc'})
 # → INSERT INTO "documents" ("title", "tenant_id") VALUES (%s, %s)
 ```
 
-**Note on column names**: the keys of `values` (in `insert` and `update`)
-and of `id` (in `update` and `delete`) must be single identifiers in
-Unicode NFC form. Spaces between characters, accented letters, and
-other non-ASCII letters are accepted (`qta totale`, `quantità`). Leading
-or trailing whitespace, quoted names, qualified names (`users.id`), and
-JSONB paths (`data->>x`) are rejected. This is what makes the `scope`
-collision check reliable: a client can't reference a scoped column
-under a different spelling and slip past the check.
+**Note on column names**: the keys of `values` (in `insert` and `update`) and
+of `id` (in `update` and `delete`) must be plain column names - no dots, no
+JSONB paths, no quoting. This is what makes the `scope` collision check
+reliable across dialects: a client can't reference a scoped column under a
+different spelling (e.g. `users.tenant_id`, or `tenant_id` with trailing
+whitespace) and slip past the check.
+
+### Allowlists (`allowed_columns`, `allowed_sources`)
+
+`scope` protects *rows*; the allowlists protect *what a client may name*.
+Both are exact-match sets of strings, set server-side when you build the
+`Datasource`:
+
+```python
+ds = filtersql.Datasource(
+    source          = 'users',
+    dbms            = 'Pg',
+    scope           = {'tenant_id': 42},
+    allowed_columns = {'id', 'name', 'status', 'created_at'},
+    allowed_sources = {'users', 'orders'},
+)
+```
+
+With `allowed_columns` set, every column a client can reference is checked
+against it - `columns`, `filters` and `having` (including nested `and`/`or`
+groups), `order`, `group_by`, `cursor`, `returning`, and the keys of
+`values` and `id`. A name that is not listed raises `ValidationError`.
+
+- **Exact match, nothing is normalized.** `Name`, `name `, `users.name` and a
+  Unicode look-alike are all different strings, and none of them matches
+  `name`. List a column exactly as the client will send it, including a
+  JSONB path like `attributes->>amount`.
+- **`SELECT *` is refused**: `columns` must be given explicitly.
+- **`raw` columns and filters are refused**, even with `allow_raw_fields=True`:
+  a raw string is SQL, not a column name, so it cannot be allowlisted.
+- **`scope` columns do not have to be listed.** Scope is added by the server
+  after the check, so a client that is not allowed to name `tenant_id` can
+  neither filter on it nor set it.
+- An `alias` is an output label, not a column reference, and is not checked.
+- `None` (the default) keeps the old behaviour. An **empty** collection is
+  not "no restriction": it allows nothing.
+
+`allowed_sources` is checked the same way against `source` on every action,
+and applies to a raw source too (the whole string must be listed). Neither
+parameter can be supplied in the payload of `filtersql()`.
+
+Use the allowlist as the primary control; identifier validation (no dots,
+quotes, JSONB paths in write keys) stays underneath it as a safety net for
+callers that forget to set one.
 
 ---
 
@@ -427,7 +469,7 @@ print(ds.debug(query, values))
 # from
 #   "users"
 # where
-#   ("first_name" ilike chr(37) || 'John' || chr(37) escape '\')
+#   ("first_name" ilike '%John%' escape '\')
 ```
 
 > Disabled by default — set FILTERSQL_DEBUG=1 in your environment to enable, since this should never run in production
@@ -436,15 +478,16 @@ print(ds.debug(query, values))
 
 ## Wildcard Escape in Pattern Matching
 
-Operators like `contains`, `icontains`, `starts_with`, etc. use `like` (or, for
-SQLite's case-sensitive variants, `glob`) patterns.
-
 `filtersql` automatically escapes the wildcard characters that matter for
 whichever mechanism is in play - `%` and `_` for `like`/`ilike`, or `*`, `?`
 and `[` for SQLite's `glob` - so searching for `"100%"` finds the literal
 string `"100%"`, not `"100"` followed by anything.
 
-The escape is applied transparently. This only affects operators that use patterns (`contains`, `starts_with`, etc.). Other operators (`=`, `>`, `in`, etc.) are unchanged.
+The escaping is applied to the value before it is bound: the generated
+SQL contains no wildcard markers, and the pattern itself (e.g.
+`'%100\%%'`) is what the driver binds. This only affects operators that
+use patterns (`contains`, `starts_with`, etc.). Other operators
+(`=`, `>`, `in`, ...) are unchanged.
 
 ---
 
@@ -528,7 +571,7 @@ class SQLFilter(BaseModel):
         'starts_with', 'not_starts_with', 'istarts_with', 'not_istarts_with',
         'ends_with', 'not_ends_with', 'iends_with', 'not_iends_with',
         'regexp', 'iregexp', 'not_regexp', 'not_iregexp',
-        'null', 'notnull', 'fts', 'fts_query', 'reverse_in'
+        'null', 'notnull', 'fts', 'fts_query'
     ]
     value: str
 
@@ -663,9 +706,8 @@ ds = filtersql.Datasource(..., fts_language='italian')
 | `icontains` / `not_icontains` | Case-insensitive substring / exclusion |
 | `istarts_with` / `not_istarts_with` | Case-insensitive prefix / exclusion |
 | `iends_with` / `not_iends_with` | Case-insensitive suffix / exclusion |
-| `null` / `notnull` | NULL checks - no value needed |
+| `null` / `notnull` | NULL checks - no value needed. The only way to test for NULL: every other operator rejects a `None` value |
 | `in` / `notin` | List membership |
-| `reverse_in` | Value in a set of columns - `? IN (col1, col2)` |
 | `regexp` / `not_regexp` | Case-sensitive regular expression / exclusion |
 | `iregexp` / `not_iregexp`| Case-insensitive regexp / exclusion |
 | `fts` | Full-text search on indexed column (Pg, MySQL) |
@@ -677,11 +719,11 @@ ds = filtersql.Datasource(..., fts_language='italian')
 
 | DBMS | `dbms` value | Default placeholder |
 |---|---|---|
-| PostgreSQL | `'Pg'` | `%s` |
-| SQLite | `'SQLite'` | `?` |
-| DuckDB | `'DuckDB'` | `?` |
+| PostgreSQL | `'pg'` | `%s` |
+| SQLite | `'sqlite'` | `?` |
+| DuckDB | `'duckdb'` | `?` |
 | MySQL | `'mysql'` | `%s` |
-| Oracle | `'Oracle'` | `?` |
+| Oracle | `'oracle'` | `?` |
 
 `dbms` is case-insensitive - `'pg'`, `'PG'`, `'Pg'` are all equivalent.
 Unrecognized names (e.g. `'postgres'`) still raise a `ConfigurationError`

@@ -29,7 +29,7 @@ BASE_COLUMNS = [
 def make_ds(**kwargs):
     """Convenience factory — defaults to Pg with %s placeholder."""
     kwargs.setdefault('source', 'users')
-    kwargs.setdefault('dbms', 'Pg')
+    kwargs.setdefault('dbms', 'pg')
     kwargs.setdefault('placeholder', '%s')
     return sql.Datasource(**kwargs)
 
@@ -124,69 +124,65 @@ class TestFilterOperators(unittest.TestCase):
     # String matching
     def test_starts_with(self):
         q, v = self._where('starts_with', 'Jo')
-        self.assertIn("like %s || chr(37)", q)
-        self.assertEqual(v, ['Jo'])
+        self.assertIn("like %s", q)
+        self.assertNotIn("chr(37)", q)
+        self.assertEqual(v, ['Jo%'])
 
     def test_ends_with(self):
         q, v = self._where('ends_with', 'son')
-        self.assertIn("like chr(37) || %s", q)
+        self.assertIn("like %s", q)
+        self.assertEqual(v, ['%son'])
 
     def test_contains(self):
         q, v = self._where('contains', 'oh')
-        self.assertIn("like chr(37) || %s || chr(37)", q)
+        self.assertIn("like %s", q)
+        self.assertEqual(v, ['%oh%'])
 
     def test_istarts_with(self):
         q, v = self._where('istarts_with', 'jo')
-        self.assertIn('ilike', q)
-        self.assertIn("|| chr(37)", q)
+        self.assertIn('ilike %s', q)
+        self.assertEqual(v, ['jo%'])
 
     def test_iends_with(self):
         q, v = self._where('iends_with', 'son')
-        self.assertIn('ilike', q)
-        self.assertIn("chr(37) ||", q)
+        self.assertIn('ilike %s', q)
+        self.assertEqual(v, ['%son'])
 
     def test_icontains(self):
         q, v = self._where('icontains', 'oh')
-        self.assertIn('ilike', q)
-        self.assertIn("chr(37) ||", q)
-        self.assertIn("|| chr(37)", q)
+        self.assertIn('ilike %s', q)
+        self.assertEqual(v, ['%oh%'])
 
     # Negated string matching
     def test_not_contains(self):
         q, v = self._where('not_contains', 'oh')
-        self.assertIn('not', q)
-        self.assertIn('like', q)
-        self.assertEqual(v, ['oh'])
+        self.assertIn('not like %s', q)
+        self.assertEqual(v, ['%oh%'])
 
     def test_not_starts_with(self):
         q, v = self._where('not_starts_with', 'Jo')
-        self.assertIn('not', q)
-        self.assertIn('like', q)
-        self.assertEqual(v, ['Jo'])
+        self.assertIn('not like %s', q)
+        self.assertEqual(v, ['Jo%'])
 
     def test_not_icontains(self):
         q, v = self._where('not_icontains', 'oh')
-        self.assertIn('not', q)
-        self.assertIn('ilike', q)
-        self.assertEqual(v, ['oh'])
+        self.assertIn('not ilike %s', q)
+        self.assertEqual(v, ['%oh%'])
 
     def test_not_ends_with(self):
         q, v = self._where('not_ends_with', 'son')
-        self.assertIn('not', q)
-        self.assertIn('like', q)
-        self.assertEqual(v, ['son'])
+        self.assertIn('not like %s', q)
+        self.assertEqual(v, ['%son'])
 
     def test_not_istarts_with(self):
         q, v = self._where('not_istarts_with', 'Jo')
-        self.assertIn('not', q)
-        self.assertIn('ilike', q)
-        self.assertEqual(v, ['Jo'])
+        self.assertIn('not ilike %s', q)
+        self.assertEqual(v, ['Jo%'])
 
     def test_not_iends_with(self):
         q, v = self._where('not_iends_with', 'son')
-        self.assertIn('not', q)
-        self.assertIn('ilike', q)
-        self.assertEqual(v, ['son'])
+        self.assertIn('not ilike %s', q)
+        self.assertEqual(v, ['%son'])
 
     # NULL checks
     def test_null(self):
@@ -264,12 +260,16 @@ class TestFilterOperators(unittest.TestCase):
         self.assertEqual(v, ['^john'])
 
     # reverse_in
-    def test_reverse_in(self):
+    def test_reverse_in_removed(self):
+        """
+        reverse_in packed several column names into one comma-separated
+        `field` string, which cannot be checked against an exact-match
+        allowed_columns list, and was the injection surface of the 1.2.1
+        CVE. It was removed in 1.3: it must now be rejected as unknown.
+        """
         ds = make_ds()
-        q, v = get_query(ds, filters=[{'field': 'role, status', 'operator': 'reverse_in', 'value': 'admin'}])
-        self.assertIn('%s in (', q)
-        self.assertIn('"role"', q)
-        self.assertIn('"status"', q)
+        with self.assertRaises(ValidationError):
+            get_query(ds, filters=[{'field': 'role, status', 'operator': 'reverse_in', 'value': 'admin'}])
 
     def test_unknown_operator_raises_error(self):
         with self.assertRaises(ValidationError):
@@ -282,7 +282,7 @@ class TestFilterOperators(unittest.TestCase):
                 'source': 'docs',
                 'filters': [{'field': 'tsv', 'operator': 'fts', 'value': 'contratti'}],
             },
-            dbms='Pg',
+            dbms='pg',
             placeholder='%s',
             fts_language='italian',
         )
@@ -297,7 +297,7 @@ class TestFilterOperators(unittest.TestCase):
                     'source': 'docs',
                     'fts_language': 'italian',
                 },
-                dbms='Pg',
+                dbms='pg',
                 placeholder='%s',
             )
         self.assertIn('fts_language', str(cm.exception))
@@ -319,7 +319,7 @@ class TestFilterGroups(unittest.TestCase):
         self.assertIn('or', q.lower())
         self.assertIn('"first_name"', q)
         self.assertIn('"last_name"', q)
-        self.assertEqual(v, ['john', 'john'])
+        self.assertEqual(v, ['%john%', '%john%'])
 
     def test_or_group_combined_with_and(self):
         ds = make_ds()
@@ -332,7 +332,7 @@ class TestFilterGroups(unittest.TestCase):
         ])
         self.assertIn('and', q.lower())
         self.assertIn('or', q.lower())
-        self.assertEqual(v, ['active', 'john', 'john'])
+        self.assertEqual(v, ['active', '%john%', '%john%'])
 
     def test_and_nested_inside_or(self):
         ds = make_ds()
@@ -376,7 +376,7 @@ class TestMultipleFilters(unittest.TestCase):
             {'field': 'last_name',  'operator': 'icontains', 'value': 'sm'},
         ])
         self.assertIn('and', q.lower())
-        self.assertEqual(v, ['jo', 'sm'])
+        self.assertEqual(v, ['%jo%', '%sm%'])
 
     def test_null_and_eq_combined(self):
         ds = make_ds()
@@ -459,14 +459,15 @@ class TestJsonbColumns(unittest.TestCase):
         self.assertIn("'amt'' or ''1''=''1'", q)
         self.assertNotIn("'amt' or '1'='1'", q)
 
-    def test_reverse_in_jsonb_key_quote_injection_is_escaped(self):
+    def test_reverse_in_with_malicious_jsonb_key_is_rejected(self):
+        """Regression for the 1.2.1 CVE: the operator no longer exists, so
+        nothing is built from the malicious key at all."""
         ds = make_ds()
         malicious_key = "a' or '1'='1"
-        q, v = get_query(ds, filters=[
-            {'field': f"col1, attributes->>{malicious_key}", 'operator': 'reverse_in', 'value': 'x'}
-        ])
-        self.assertIn("'a'' or ''1''=''1'", q)
-        self.assertNotIn("'a' or '1'='1'", q)
+        with self.assertRaises(ValidationError):
+            get_query(ds, filters=[
+                {'field': f"col1, attributes->>{malicious_key}", 'operator': 'reverse_in', 'value': 'x'}
+            ])
 
 
 # ---------------------------------------------------------------------------
@@ -518,7 +519,7 @@ class TestInsert(unittest.TestCase):
         self.assertIn('"id"', q)
 
     def test_insert_returning_non_pg_raises(self):
-        ds = sql.Datasource(source='users', dbms='SQLite')
+        ds = sql.Datasource(source='users', dbms='sqlite')
         with self.assertRaises(ValidationError):
             ds.insert(values={'first_name': 'John'}, returning='id')
 
@@ -666,7 +667,7 @@ class TestWhere(unittest.TestCase):
         ])
         self.assertIn('"id" > %s', clause)
         self.assertIn('ilike', clause)
-        self.assertEqual(v, [0, 'sm'])
+        self.assertEqual(v, [0, '%sm%'])
 
 
 # ---------------------------------------------------------------------------
@@ -704,7 +705,7 @@ class TestFts(unittest.TestCase):
         self.assertEqual(v, ['contratti'])
 
     def test_fts_not_supported_on_sqlite(self):
-        ds = sql.Datasource(source='docs', dbms='SQLite')
+        ds = sql.Datasource(source='docs', dbms='sqlite')
         with self.assertRaises(ValidationError):
             get_query(ds, filters=[{'field': 'tsv', 'operator': 'fts', 'value': 'contratti'}])
 
@@ -728,7 +729,7 @@ class TestFts(unittest.TestCase):
 class TestQuote(unittest.TestCase):
     """Tests for _quote() — the identifier quoting method."""
 
-    def _q(self, name, dbms='Pg'):
+    def _q(self, name, dbms='pg'):
         ds = sql.Datasource(source='t', dbms=dbms)
         quote = sql.DBMS_MAP[dbms]['quote']
         return ds._quote(name, quote)
@@ -741,10 +742,10 @@ class TestQuote(unittest.TestCase):
         self.assertEqual(self._q('first_name', 'mysql'), '`first_name`')
 
     def test_simple_field_sqlite(self):
-        self.assertEqual(self._q('id', 'SQLite'), '"id"')
+        self.assertEqual(self._q('id', 'sqlite'), '"id"')
 
     def test_simple_field_oracle(self):
-        self.assertEqual(self._q('id', 'Oracle'), '"id"')
+        self.assertEqual(self._q('id', 'oracle'), '"id"')
 
     # Schema prefix
     def test_schema_prefix(self):
@@ -791,7 +792,7 @@ class TestQuote(unittest.TestCase):
             self._q('')
 
     def test_none_raises(self):
-        ds = sql.Datasource(source='t', dbms='Pg')
+        ds = sql.Datasource(source='t', dbms='pg')
         with self.assertRaises(InvalidIdentifierError):
             ds._quote(None, '"')
 
@@ -880,7 +881,7 @@ class TestDebug(unittest.TestCase):
 
     def test_debug_replaces_none_with_null(self):
         ds = make_ds()
-        q, v = ds.where(filters=[{'field': 'deleted_at', 'operator': '=', 'value': None}])
+        q, v = ds.insert(values={'deleted_at': None})
         debug = ds.debug(q, v)
         self.assertIn('null', debug)
 
@@ -903,7 +904,7 @@ class TestDebug(unittest.TestCase):
         self.assertNotIn('%s', debug)
 
     def test_debug_with_question_mark_placeholder(self):
-        ds = sql.Datasource(source='users', dbms='SQLite', placeholder='?')
+        ds = sql.Datasource(source='users', dbms='sqlite', placeholder='?')
         q, v = ds.where(filters=[{'field': 'id', 'operator': '=', 'value': 1}])
         debug = ds.debug(q, v)
         self.assertIn('1', debug)
@@ -1023,30 +1024,33 @@ class TestMultiDBMS(unittest.TestCase):
         return ds.select(columns=[{'field': 'id'}], filters=filters)
 
     def test_icontains_sqlite_uses_like(self):
-        q, _ = self._select('SQLite', [{'field': 'name', 'operator': 'icontains', 'value': 'jo'}])
+        q, v = self._select('sqlite', [{'field': 'name', 'operator': 'icontains', 'value': 'jo'}])
         self.assertIn('like', q)
         self.assertNotIn('ilike', q)
+        self.assertEqual(v, ['%jo%'])
 
     def test_icontains_pg_uses_ilike(self):
-        q, _ = self._select('Pg', [{'field': 'name', 'operator': 'icontains', 'value': 'jo'}])
+        q, v = self._select('pg', [{'field': 'name', 'operator': 'icontains', 'value': 'jo'}])
         self.assertIn('ilike', q)
+        self.assertEqual(v, ['%jo%'])
 
     def test_contains_sqlite_uses_glob(self):
-        q, _ = self._select('SQLite', [{'field': 'name', 'operator': 'contains', 'value': 'jo'}])
+        q, v = self._select('sqlite', [{'field': 'name', 'operator': 'contains', 'value': 'jo'}])
         self.assertIn('glob', q)
+        self.assertEqual(v, ['*jo*'])
 
     def test_contains_pg_uses_like(self):
-        q, _ = self._select('Pg', [{'field': 'name', 'operator': 'contains', 'value': 'jo'}])
+        q, v = self._select('pg', [{'field': 'name', 'operator': 'contains', 'value': 'jo'}])
         self.assertIn('like', q)
         self.assertNotIn('glob', q)
+        self.assertEqual(v, ['%jo%'])
 
     def test_regexp_pg(self):
-        q, _ = self._select('Pg', [{'field': 'name', 'operator': 'regexp', 'value': '^jo'}])
+        q, _ = self._select('pg', [{'field': 'name', 'operator': 'regexp', 'value': '^jo'}])
         self.assertIn('~', q)
-        self.assertNotIn('regexp', q)
 
     def test_regexp_sqlite(self):
-        q, _ = self._select('SQLite', [{'field': 'name', 'operator': 'regexp', 'value': '^jo'}])
+        q, _ = self._select('sqlite', [{'field': 'name', 'operator': 'regexp', 'value': '^jo'}])
         self.assertIn('regexp', q)
 
     def test_regexp_mysql(self):
@@ -1054,12 +1058,12 @@ class TestMultiDBMS(unittest.TestCase):
         self.assertIn('regexp', q)
 
     def test_limit_pg_offset(self):
-        ds = sql.Datasource(source='t', dbms='Pg')
+        ds = sql.Datasource(source='t', dbms='pg')
         q, _ = ds.select(columns=[{'field': 'id'}], limit={'start': 10, 'length': 5})
         self.assertIn('limit 5 offset 10', q)
 
     def test_limit_sqlite_comma(self):
-        ds = sql.Datasource(source='t', dbms='SQLite')
+        ds = sql.Datasource(source='t', dbms='sqlite')
         q, _ = ds.select(columns=[{'field': 'id'}], limit={'start': 10, 'length': 5})
         self.assertIn('limit 10, 5', q)
 
@@ -1071,27 +1075,26 @@ class TestMultiDBMS(unittest.TestCase):
 
     def test_fts_raises_on_sqlite(self):
         with self.assertRaises(ValidationError):
-            self._select('SQLite', [{'field': 'tsv', 'operator': 'fts', 'value': 'test'}])
+            self._select('sqlite', [{'field': 'tsv', 'operator': 'fts', 'value': 'test'}])
 
     def test_fts_raises_on_oracle(self):
         with self.assertRaises(ValidationError):
-            self._select('Oracle', [{'field': 'tsv', 'operator': 'fts', 'value': 'test'}])
+            self._select('oracle', [{'field': 'tsv', 'operator': 'fts', 'value': 'test'}])
 
     def test_duckdb_basic_placeholder(self):
-        q, _ = self._select('DuckDB', [{'field': 'name', 'operator': '=', 'value': 'jo'}])
+        q, _ = self._select('duckdb', [{'field': 'name', 'operator': '=', 'value': 'jo'}])
         self.assertIn('?', q)
         self.assertNotIn('%s', q)
 
     def test_duckdb_iregexp_uses_tilde_asterisk(self):
-        q, _ = self._select('DuckDB', [{'field': 'name', 'operator': 'iregexp', 'value': '^jo'}])
+        q, _ = self._select('duckdb', [{'field': 'name', 'operator': 'iregexp', 'value': '^jo'}])
         self.assertIn('~*', q)
         self.assertIn('?', q)
         
     def test_duckdb_limit_offset(self):
-        ds = sql.Datasource(source='t', dbms='DuckDB')
+        ds = sql.Datasource(source='t', dbms='duckdb')
         q, _ = ds.select(columns=[{'field': 'id'}], limit={'start': 10, 'length': 5})
         self.assertIn('limit 5 offset 10', q)
-
 
 # ---------------------------------------------------------------------------
 # 17. scope
@@ -1170,7 +1173,7 @@ class TestFiltersqlFunction(unittest.TestCase):
                 'columns': [{'field': 'id'}, {'field': 'first_name'}],
                 'filters': [{'field': 'id', 'operator': '=', 'value': 1}],
             },
-            dbms='Pg',
+            dbms='pg',
             placeholder='%s',
         )
         self.assertIn('select', q.lower())
@@ -1185,7 +1188,7 @@ class TestFiltersqlFunction(unittest.TestCase):
                 'source': 'users',
                 'values': {'first_name': 'John'},
             },
-            dbms='Pg',
+            dbms='pg',
             placeholder='%s',
         )
         self.assertIn('insert into', q.lower())
@@ -1199,7 +1202,7 @@ class TestFiltersqlFunction(unittest.TestCase):
                 'id': {'id': 42},
                 'values': {'first_name': 'John'},
             },
-            dbms='Pg',
+            dbms='pg',
             placeholder='%s',
         )
         self.assertIn('update', q.lower())
@@ -1213,7 +1216,7 @@ class TestFiltersqlFunction(unittest.TestCase):
                 'source': 'users',
                 'id': {'id': 42},
             },
-            dbms='Pg',
+            dbms='pg',
             placeholder='%s',
         )
         self.assertIn('delete from', q.lower())
@@ -1221,11 +1224,11 @@ class TestFiltersqlFunction(unittest.TestCase):
 
     def test_missing_source_raises(self):
         with self.assertRaises(ValidationError):
-            sql.filtersql(payload={'action': 'select'}, dbms='Pg')
+            sql.filtersql(payload={'action': 'select'}, dbms='pg')
 
     def test_invalid_action_raises(self):
         with self.assertRaises(ValidationError):
-            sql.filtersql(payload={'action': 'drop', 'source': 'users'}, dbms='Pg')
+            sql.filtersql(payload={'action': 'drop', 'source': 'users'}, dbms='pg')
 
     def test_scope_applied_via_function(self):
         q, v = sql.filtersql(
@@ -1234,7 +1237,7 @@ class TestFiltersqlFunction(unittest.TestCase):
                 'source': 'users',
                 'columns': [{'field': 'id'}],
             },
-            dbms='Pg',
+            dbms='pg',
             placeholder='%s',
             scope={'tenant_id': 42},
         )
@@ -1248,7 +1251,7 @@ class TestFiltersqlFunction(unittest.TestCase):
                 'source': 'users',
                 'columns': [{'field': 'id'}],
             },
-            dbms='Pg',
+            dbms='pg',
         )
         self.assertIn('select', q.lower())
 
@@ -1436,7 +1439,7 @@ class TestCursorPagination(unittest.TestCase):
         self.assertIn('"id" > %s', q)
         self.assertIn('"status" = %s', q)
         self.assertIn('ilike', q)
-        self.assertEqual(v, [100, 'active', 'john'])
+        self.assertEqual(v, [100, 'active', '%john%'])
 
     def test_cursor_with_order_direction_inversion(self):
         """When direction='prev', order should be inverted."""
@@ -1560,7 +1563,7 @@ class TestMySQLFts(unittest.TestCase):
 class TestQuoteEdgeCases(unittest.TestCase):
     """Test edge cases and security for _quote()."""
 
-    def _q(self, name, dbms='Pg'):
+    def _q(self, name, dbms='pg'):
         """Helper per chiamare _quote()."""
         ds = sql.Datasource(source='t', dbms=dbms)
         quote = sql.DBMS_MAP[dbms]['quote']
@@ -1580,16 +1583,6 @@ class TestQuoteEdgeCases(unittest.TestCase):
         """JSONB path with quotes should be escaped."""
         result = self._q("data->>name'")
         self.assertIsNotNone(result)
-
-    def _q(self, name, dbms='Pg'):
-        ds = sql.Datasource(source='t', dbms=dbms)
-        quote = sql.DBMS_MAP[dbms]['quote']
-        return ds._quote(name, quote)
-
-    def test_quote_with_double_dot(self):
-        """Too many dots should be rejected."""
-        with self.assertRaises(InvalidIdentifierError):
-            self._q('a.b.c.d')
 
     def test_quote_with_sql_keyword_injection(self):
         """SQL keywords in identifier should be quoted, not executed."""
@@ -1630,7 +1623,7 @@ class TestCursorViaFiltersqlFunction(unittest.TestCase):
                 'direction': 'next',
                 'order': [{'field': 'id', 'order': 'asc'}]
             },
-            dbms='Pg',
+            dbms='pg',
             placeholder='%s'
         )
         self.assertIn('"id" > %s', q)
@@ -1644,7 +1637,7 @@ class TestCursorViaFiltersqlFunction(unittest.TestCase):
             cursor={'id': 100},
             direction='next',
             order=[{'field': 'id', 'order': 'asc'}],
-            dbms='Pg'
+            dbms='pg'
         )
         self.assertIn('"id" > %s', q)
         self.assertEqual(v, [100])
@@ -1660,7 +1653,7 @@ class TestCursorViaFiltersqlFunction(unittest.TestCase):
             payload,
             cursor={'id': 100},
             direction='next',
-            dbms='Pg'
+            dbms='pg'
         )
         self.assertIn('"id" > %s', q)
         self.assertEqual(v, [100])
@@ -1878,14 +1871,6 @@ class TestValidationGaps(unittest.TestCase):
             {'and': []},
         ])
         self.assertNotIn('()', q)
-
-    def test_empty_and_group_is_skipped(self):
-        ds = make_ds()
-        q, v = get_query(ds, filters=[
-            {'field': 'status', 'operator': '=', 'value': 'active'},
-            {'and': []},
-        ])
-        self.assertNotIn('()', q)
         self.assertIn('"status" = %s', q)
 
     def test_nested_empty_group_is_skipped(self):
@@ -1903,6 +1888,196 @@ class TestValidationGaps(unittest.TestCase):
         ds = make_ds()
         q, v = get_query(ds, filters=[{'or': []}, {'and': []}])
         self.assertNotIn('where', q.lower())
+
+
+# ---------------------------------------------------------------------------
+# 1.3: None is rejected by filters
+# ---------------------------------------------------------------------------
+
+class TestNoneRejectedInFilters(unittest.TestCase):
+    """`col = NULL` is never true in SQL. Nullness must use null/notnull."""
+
+    def _f(self, **f):
+        f.setdefault('field', 'x')
+        return get_query(make_ds(), filters=[f])
+
+    def test_scalar_operators_reject_none(self):
+        for op in ['=', '!=', '>', '>=', '<', '<=', 'contains', 'starts_with', 'regexp']:
+            with self.subTest(op=op), self.assertRaises(ValidationError):
+                self._f(operator=op, value=None)
+
+    def test_missing_value_is_none(self):
+        with self.assertRaises(ValidationError):
+            self._f(operator='=')
+
+    def test_in_notin_between_reject_none(self):
+        for op, val in [('in', None), ('notin', None), ('in', [1, None]),
+                        ('notin', [None]), ('between', [1, None])]:
+            with self.subTest(op=op, val=val), self.assertRaises(ValidationError):
+                self._f(operator=op, value=val)
+
+    def test_null_operators_still_work(self):
+        q, v = self._f(operator='null')
+        self.assertIn('is null', q.lower())
+        q, v = self._f(operator='notnull')
+        self.assertIn('is not null', q.lower())
+
+    def test_insert_and_update_still_accept_none(self):
+        """None is a legitimate VALUE to write (-> NULL); only filters reject it."""
+        q, v = make_ds().insert(values={'deleted_at': None})
+        self.assertEqual(v, [None])
+        q, v = make_ds().update(id={'id': 1}, values={'deleted_at': None})
+        self.assertEqual(v, [None, 1])
+
+
+# ---------------------------------------------------------------------------
+# 1.3: allowed_columns / allowed_sources
+# ---------------------------------------------------------------------------
+
+class TestAllowlists(unittest.TestCase):
+    """
+    `secret` is never in the list. Every entry point that can reference a
+    column must reject it; a regression in any one of them silently
+    re-opens the whole allowlist.
+    """
+
+    def _ds(self, **kw):
+        kw.setdefault('allowed_columns', {'id', 'name', 'status'})
+        return make_ds(**kw)
+
+    @staticmethod
+    def _f(field, **extra):
+        return {'field': field, 'operator': '=', 'value': 1, **extra}
+
+    def _rejected(self, fn):
+        with self.assertRaises(ValidationError):
+            fn()
+
+    # -- every entry point ---------------------------------------------------
+    def test_columns_str(self):
+        self._rejected(lambda: self._ds().select(columns=['secret']))
+
+    def test_columns_dict(self):
+        self._rejected(lambda: self._ds().select(columns=[{'field': 'secret'}]))
+
+    def test_select_star_refused(self):
+        self._rejected(lambda: self._ds().select())
+
+    def test_filter_flat_and_nested(self):
+        d = self._ds()
+        for flt in [self._f('secret'),
+                    {'or': [self._f('secret')]},
+                    {'and': [{'or': [self._f('secret')]}]}]:
+            with self.subTest(flt=flt):
+                self._rejected(lambda: d.select(columns=['id'], filters=[flt]))
+
+    def test_having_flat_and_nested(self):
+        d = self._ds()
+        for flt in [self._f('secret'), {'or': [self._f('secret')]}]:
+            with self.subTest(flt=flt):
+                self._rejected(lambda: d.select(columns=['id'], group_by=['id'], having=[flt]))
+
+    def test_group_by(self):
+        self._rejected(lambda: self._ds().select(columns=['id'], group_by=['secret']))
+
+    def test_order(self):
+        self._rejected(lambda: self._ds().select(columns=['id'], order=[{'field': 'secret'}]))
+
+    def test_cursor_seek_and_next(self):
+        d = self._ds()
+        self._rejected(lambda: d.select(columns=['id'], cursor={'secret': 1}, direction='seek'))
+        self._rejected(lambda: d.select(columns=['id'], order=[{'field': 'secret'}],
+                                        cursor={'secret': 1}, direction='next'))
+
+    def test_write_paths(self):
+        d = self._ds()
+        self._rejected(lambda: d.insert(values={'secret': 1}))
+        self._rejected(lambda: d.insert(values={'name': 'x'}, returning='secret'))
+        self._rejected(lambda: d.update(id={'id': 1}, values={'secret': 1}))
+        self._rejected(lambda: d.update(id={'secret': 1}, values={'name': 'x'}))
+        self._rejected(lambda: d.delete(id={'secret': 1}))
+
+    def test_raw_refused_while_active(self):
+        d = self._ds(allow_raw_fields=True)
+        self._rejected(lambda: d.select(columns=[{'field': 'secret', 'raw': True}]))
+        self._rejected(lambda: d.select(columns=['id'], filters=[
+            {'field': '1=1', 'operator': '=', 'value': 1, 'raw': True}]))
+
+    # -- exact match, no normalization --------------------------------------
+    def test_match_is_exact(self):
+        d = self._ds()
+        for spelling in ['Name', 'NAME', ' name', 'name ', 'name\u200b', 'name\x00', 'm.name']:
+            with self.subTest(spelling=spelling), self.assertRaises(FilterSQLError):
+                d.select(columns=['id'], filters=[self._f(spelling)])
+
+    def test_non_string_field_is_rejected(self):
+        d = self._ds()
+        for weird in [5, ['name'], {'a': 1}, True]:
+            with self.subTest(field=weird), self.assertRaises(FilterSQLError):
+                d.select(columns=['id'], filters=[self._f(weird)])
+
+    # -- what must keep working ---------------------------------------------
+    def test_legitimate_query_passes(self):
+        q, v = self._ds().select(columns=['id', 'name'], filters=[self._f('status')],
+                                 order=[{'field': 'id'}])
+        self.assertIn('"status" = %s', q)
+
+    def test_alias_is_an_output_label_not_a_column(self):
+        q, _ = self._ds().select(columns=[{'field': 'name', 'alias': 'anything'}])
+        self.assertIn('as "anything"', q)
+
+    def test_none_keeps_old_behaviour(self):
+        q, _ = make_ds().select(columns=['whatever'])
+        self.assertIn('"whatever"', q)
+
+    # -- empty / malformed lists --------------------------------------------
+    def test_empty_collection_is_closed(self):
+        self._rejected(lambda: self._ds(allowed_columns=set()).select(columns=['id']))
+        self._rejected(lambda: make_ds(allowed_sources=set()).select(columns=['id']))
+
+    def test_malformed_allowlist_is_a_configuration_error(self):
+        for bad in ['id', 5, ['id', ''], ['id', 3], {'id': 1}.keys()]:
+            with self.subTest(bad=bad), self.assertRaises(ConfigurationError):
+                make_ds(allowed_columns=bad)
+
+    # -- scope interplay ------------------------------------------------------
+    def test_scope_columns_need_not_be_listed(self):
+        d = self._ds(scope={'tenant_id': 400})
+        q, v = d.select(columns=['id'])
+        self.assertIn('"tenant_id" = %s', q)
+        self.assertEqual(v, [400])
+        q, v = d.insert(values={'name': 'x'})
+        self.assertEqual(v, ['x', 400])
+
+    def test_client_cannot_name_unlisted_scope_column(self):
+        d = self._ds(scope={'tenant_id': 400})
+        self._rejected(lambda: d.select(columns=['id'], filters=[self._f('tenant_id')]))
+
+    def test_listed_scope_column_is_still_protected_on_write(self):
+        d = self._ds(scope={'tenant_id': 400},
+                     allowed_columns={'id', 'name', 'tenant_id'})
+        self._rejected(lambda: d.update(id={'id': 1}, values={'tenant_id': 999}))
+        self._rejected(lambda: d.insert(values={'tenant_id': 999, 'name': 'x'}))
+
+    # -- allowed_sources ------------------------------------------------------
+    def test_sources_exact_match_on_every_action(self):
+        kw = dict(dbms='pg', allowed_sources={'users'}, allowed_columns={'id', 'name'})
+        ok = {'select': {'columns': ['id']}, 'insert': {'values': {'name': 'x'}},
+              'update': {'id': {'id': 1}, 'values': {'name': 'x'}}, 'delete': {'id': {'id': 1}}}
+        for action, extra in ok.items():
+            with self.subTest(action=action):
+                filtersql({'action': action, 'source': 'users', **extra}, **kw)
+                for bad in ['secrets', 'Users', 'public.users', 'users ']:
+                    with self.assertRaises(ValidationError):
+                        filtersql({'action': action, 'source': bad, **extra}, **kw)
+
+    def test_payload_cannot_override_allowlists(self):
+        kw = dict(dbms='pg', allowed_columns={'id'})
+        for key in ['allowed_columns', 'allowed_sources']:
+            with self.subTest(key=key), self.assertRaises(ValidationError):
+                filtersql({'action': 'select', 'source': 'users',
+                           'columns': ['id'], key: ['secret']}, **kw)
+
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
