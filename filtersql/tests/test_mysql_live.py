@@ -28,8 +28,8 @@ import uuid
 from pathlib import Path
 from urllib.parse import unquote, urlparse
 
-import pymysql
-import pymysql.cursors
+pymysql = pytest.importorskip("pymysql")
+pymysql.cursors
 
 from filtersql import filtersql
 
