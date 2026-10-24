@@ -43,7 +43,7 @@ Supports PostgreSQL, SQLite, MySQL, DuckDB and Oracle.
   - `columns=0` / `False` / `""`;
   - a `Datasource` without `source` raises `ConfigurationError` at the first query build.
 
-**Upgrading from 1.3.0:** Oracle users will see `:1, :2, …` instead of `?` (same driver, same values). Well-formed payloads are otherwise unaffected. Upgrading from an older release? Read the 1.3.0 notes in [CHANGELOG.md](CHANGELOG.md) first: `reverse_in` was removed and `None` is no longer accepted as a filter value.
+**Upgrading from 1.3.0:** Oracle users will see `:1, :2, …` instead of `?` (same driver, same values). Well-formed payloads are otherwise unaffected. Upgrading from an older release? Read the 1.3.0 notes in [CHANGELOG.md](https://github.com/fthiella/filtersql/blob/master/CHANGELOG.md) first: `reverse_in` was removed and `None` is no longer accepted as a filter value.
 
 ## Why filtersql?
 
