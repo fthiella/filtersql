@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import os
 import unicodedata
+import threading
 
 DBMS_MAP = {
     'sqlite': {
@@ -167,7 +168,7 @@ DBMS_MAP = {
         "literal_backslash_escapes": True,
     },
     'oracle': {
-        "placeholder":         '?',
+        "placeholder":         ':{n}',
         "quote":               '"',
         "search_map": {
             '=':                '{col} = {param}',
@@ -322,6 +323,41 @@ class Datasource:
 
         self.placeholder = placeholder or DBMS_MAP[self.dbms]["placeholder"]
 
+        if self.placeholder.count('{n}') > 1 or (
+            '{n}' not in self.placeholder
+            and ('{' in self.placeholder or '}' in self.placeholder)
+        ):
+            raise ConfigurationError("placeholder may contain '{n}' at most once and no other braces.")
+        self._numbered = '{n}' in self.placeholder
+        if self._numbered:
+            self._bind_prefix, self._bind_suffix = self.placeholder.split('{n}')
+
+        # Per-thread bind counter. Set to a fresh value at the top of every
+        # query build (see _begin_binds). Using threading.local instead of an
+        # instance attribute because a Datasource is routinely constructed once
+        # and shared across threads (module-level object in a web server); the
+        # bind numbering must be isolated per concurrent build, or two threads
+        # interleave :1, :2, :3 and produce corrupted SQL.
+        self._local = threading.local()
+
+    def __getstate__(self):
+        state = self.__dict__.copy()
+        state.pop('_local', None)
+        return state
+
+    def __setstate__(self, state):
+        self.__dict__.update(state)
+        self._local = threading.local()
+
+    def _begin_binds(self) -> None:
+        self._local.n = 0 if self._numbered else None
+
+    def _ph(self) -> str:
+        if self._local.n is None:
+            return self.placeholder
+        self._local.n += 1
+        return f"{self._bind_prefix}{self._local.n}{self._bind_suffix}"
+
     def select(
         self,
         *,
@@ -337,6 +373,7 @@ class Datasource:
         """
         Build a SELECT query. Pass columns, filters, order, limit explicitly.
         """
+        self._begin_binds()
         active_order = self._validate_order(order if order is not None else self.order)
 
         if filters is not None and not isinstance(filters, list):
@@ -345,7 +382,8 @@ class Datasource:
             )
         filters = list(filters) if filters else []
 
-        columns = columns or []
+        if columns is None:
+            columns = []
         if not isinstance(columns, list):
             raise ValidationError("Expected list as 'columns'.")
 
@@ -381,14 +419,14 @@ class Datasource:
                     raw_sql = str(field)
                     alias = x.get('alias') or x.get('as')
                     if alias:
-                        raw_sql += f" as {self._quote(alias, quote_char)}"
+                        raw_sql += f" as {self._quote_write_target(alias, quote_char)}"
                     parsed_columns.append(raw_sql)
                 else:
                     self._check_allowed_column(field)
                     quoted = self._quote(field, quote_char)
                     alias = x.get('alias') or x.get('as')
                     if alias:
-                        quoted += f" as {self._quote(alias, quote_char)}"
+                        quoted += f" as {self._quote_write_target(alias, quote_char)}"
                     parsed_columns.append(quoted)
             else:
                 raise ValidationError(f"Invalid column format: {x}")
@@ -400,12 +438,12 @@ class Datasource:
             )
 
         active_direction = direction or self.direction
-        where_clause, where_values = self.where(filters=filters, direction=active_direction, cursor=cursor, order=active_order)
+        where_clause, where_values = self.where(filters=filters, direction=active_direction, cursor=cursor, order=active_order, _continue=True)
 
         having_clause = ""
         having_values = []
         if having:
-            having_clause, having_values = self.having(filters=having)
+            having_clause, having_values = self.having(filters=having, _continue=True)
         
         values = where_values + having_values
 
@@ -418,7 +456,7 @@ class Datasource:
 
         active_limit = limit if limit is not None else self.limit
         limit = ""
-        if active_limit:
+        if active_limit is not None:
             if not isinstance(active_limit, dict):
                 raise ValidationError(f"Expected dict for 'limit', got {type(active_limit).__name__}")
             limit = self._build_limit(
@@ -476,7 +514,7 @@ class Datasource:
         if not values and not self.scope:
             raise ValidationError("insert() requires at least one value")
 
-        if returning and self.dbms != 'pg':
+        if returning and self.dbms not in ('pg', 'sqlite', 'duckdb'):
             raise ValidationError(f"returning is not supported by {self.dbms}")
 
         if values and not isinstance(values, dict):
@@ -496,6 +534,8 @@ class Datasource:
                 self._check_allowed_column(k)
             self._check_scope_collision(values.keys())
 
+        self._begin_binds()
+
         final_values = {**(values or {}), **self.scope}
 
         source = self._resolve_source()
@@ -507,7 +547,7 @@ class Datasource:
 
         for k, v in final_values.items():
             fields.append(self._quote_write_target(k, quote_char))
-            placeholders.append(self.placeholder)
+            placeholders.append(self._ph())
             set_values.append(v)
 
         segments = [
@@ -550,6 +590,7 @@ class Datasource:
             self._check_allowed_column(k)
         self._check_scope_collision(id.keys())
 
+        self._begin_binds()
         source = self._resolve_source()
         quote_char = DBMS_MAP[self.dbms]['quote']
 
@@ -557,12 +598,12 @@ class Datasource:
         set_values = []
 
         for k, v in values.items():
-            set_parts.append(f"{self._quote_write_target(k, quote_char)} = {self.placeholder}")
+            set_parts.append(f"{self._quote_write_target(k, quote_char)} = {self._ph()}")
             set_values.append(v)
 
         my_filters = [{'field': k, 'operator': '=', 'value': v} for k, v in id.items()]
 
-        where_clause, where_values = self.where(filters=my_filters)
+        where_clause, where_values = self.where(filters=my_filters, _continue=True)
 
         segments = [
             "update",
@@ -591,10 +632,11 @@ class Datasource:
             self._check_allowed_column(k)
         self._check_scope_collision(id.keys())
 
+        self._begin_binds()
         my_filters = [{'field': k, 'operator': '=', 'value': v} for k, v in id.items()]
 
         source = self._resolve_source()
-        where_clause, where_values = self.where(filters=my_filters)
+        where_clause, where_values = self.where(filters=my_filters, _continue=True)
 
         segments = [
             "delete from",
@@ -621,8 +663,8 @@ class Datasource:
                 "Never use this in production."
             )
 
-        parts = query.split(self.placeholder)
-        if len(parts) - 1 != len(values):
+        parts = self._split_binds(query)
+        if parts is None or len(parts) - 1 != len(values):
             return query
 
         def _format(val):
@@ -638,19 +680,88 @@ class Datasource:
             out.append(tail)
         return ''.join(out)
 
+    def _split_binds(self, query: str) -> list | None:
+        """
+        Split query on bind markers, ignoring text inside quotes.
+        Handles both fixed placeholders (?, %s) and numbered ones (:{n}).
+        """
+        if self._numbered:
+            pattern = re.compile(
+                re.escape(self._bind_prefix) + r'(\d+)' + re.escape(self._bind_suffix)
+            )
+        else:
+            pattern = re.compile(re.escape(self.placeholder))
+
+        parts = []
+        buf = []
+        i = 0
+        n = len(query)
+        expected = 1
+        quote = None
+
+        while i < n:
+            ch = query[i]
+            if quote is not None:
+                buf.append(ch)
+                if ch == quote:
+                    if i + 1 < n and query[i + 1] == quote:
+                        buf.append(query[i + 1])
+                        i += 2
+                        continue
+                    quote = None
+                i += 1
+                continue
+            if ch in ("'", '"', '`'):
+                buf.append(ch)
+                quote = ch
+                i += 1
+                continue
+
+            match = pattern.match(query, i)
+            if self._numbered:
+                ok = match and int(match.group(1)) == expected
+            else:
+                ok = bool(match)
+
+            if ok:
+                parts.append(''.join(buf))
+                buf = []
+                if self._numbered:
+                    expected += 1
+                i = match.end()
+                continue
+
+            buf.append(ch)
+            i += 1
+
+        parts.append(''.join(buf))
+        if self._numbered and expected - 1 != len(parts) - 1:
+            return None
+        return parts
+
     def _validate_order(self, order_list: list | None) -> list:
         if order_list is None:
             return []
         if not isinstance(order_list, list):
             raise ValidationError(f"Expected list for 'order', got {type(order_list).__name__}")
+        seen = set()
         for item in order_list:
             if not isinstance(item, dict) or not item.get('field'):
                 raise ValidationError(f"Each item in 'order' must be a dict with a 'field' key: {item!r}")
-            self._check_allowed_column(item['field'])
+            field = item['field']
+            if field in seen:
+                raise ValidationError(
+                    f"Duplicate field {field!r} in 'order'. "
+                    f"Each column may appear only once."
+                )
+            seen.add(field)
+            self._check_allowed_column(field)
         return order_list
 
-    def where(self, *, filters: list = None, direction: str = None, cursor: dict = None, order: list = None) -> tuple[str, list]:
+    def where(self, *, filters: list = None, direction: str = None, cursor: dict = None, order: list = None, _continue: bool = False) -> tuple[str, list]:
         """Build a WHERE clause from filters and cursor. Returns (clause, values)."""
+        if not _continue:
+            self._begin_binds()
         active_direction = direction or self.direction
         active_order = self._validate_order(order if order is not None else self.order)
 
@@ -664,15 +775,28 @@ class Datasource:
                 f"Invalid cursor format. Expected dict, got: {type(cursor).__name__}"
             )
 
-        if cursor and not active_direction:
-            raise ValidationError(
-                "A 'direction' ('seek', 'next', 'prev') must be provided when using a 'cursor'."
-            )
-
-        if cursor and active_direction and active_direction not in ('seek', 'next', 'prev'):
+        if active_direction is not None and active_direction not in ('seek', 'next', 'prev'):
             raise ValidationError(
                 f"Invalid direction '{active_direction}'. Please use: seek, next, prev."
             )
+
+        if cursor:
+            if not active_direction:
+                raise ValidationError(
+                    "A 'direction' ('seek', 'next', 'prev') must be provided "
+                    "when using a 'cursor'."
+                )
+            for k, v in cursor.items():
+                if v is None:
+                    raise ValidationError(
+                        f"Cursor value for field {k!r} cannot be None. "
+                        f"Use a 'null'/'notnull' filter for NULL tests."
+                    )
+                if isinstance(v, (list, tuple, dict, set, frozenset)):
+                    raise ValidationError(
+                        f"Cursor value for field {k!r} must be a scalar, "
+                        f"got {type(v).__name__}."
+                    )
 
         if cursor and active_direction in ('next', 'prev'):
             if not active_order:
@@ -683,14 +807,12 @@ class Datasource:
             order_fields = [o['field'] for o in active_order]
             order_field_set = set(order_fields)
 
-            # 1. every cursor key must be in order
             extra = [k for k in cursor if k not in order_field_set]
             if extra:
                 raise ValidationError(
                     f"Cursor field(s) {extra} must be present in 'order' for keyset pagination."
                 )
 
-            # 2. every order field must be present in the cursor
             missing = [f for f in order_fields if f not in cursor]
             if missing:
                 raise ValidationError(
@@ -705,19 +827,28 @@ class Datasource:
         all_filters = scope_filters + list(filters or [])
 
         if all_filters or cursor:
-            return self._build_where(filters=all_filters, direction=active_direction, dbms=self.dbms, cursor=cursor, order=active_order)
+            return self._build_where(filters=all_filters, direction=active_direction, cursor=cursor, order=active_order)
         return "", []
 
-    def having(self, *, filters: list = None) -> tuple[str, list]:
+    def having(self, *, filters: list = None, _continue: bool = False) -> tuple[str, list]:
         """
         Build HAVING clause. Same logic as WHERE but for GROUP BY.
         """
+        if filters is not None and not isinstance(filters, list):
+            raise ValidationError(
+                f"Expected list for 'filters', got {type(filters).__name__}: {filters!r}"
+            )
+
         if not filters:
             return "", []
+
+        if not _continue:
+            self._begin_binds()
+
         self._check_allowed_filters(filters)
         return self._build_filter_group(filters, join='and')
 
-    def _build_where(self, *, filters: list, direction: str, dbms: str, cursor: dict = None, order: list = None) -> tuple[str, list]:
+    def _build_where(self, *, filters: list, direction: str, cursor: dict = None, order: list = None) -> tuple[str, list]:
         """Build a WHERE clause from filters. Returns (clause, values)."""
 
         for item in filters:
@@ -728,7 +859,7 @@ class Datasource:
         m_data = []
 
         if cursor and direction:
-            quote = DBMS_MAP[dbms]['quote']
+            quote = DBMS_MAP[self.dbms]['quote']
 
             order_map = {
                 o['field']: o.get('order', 'asc')
@@ -740,7 +871,7 @@ class Datasource:
                 for k, v in cursor.items():
                     self._check_allowed_column(k)
                     conditions.append(
-                        f"{self._quote(k, quote)} = {self.placeholder}"
+                        f"{self._quote(k, quote)} = {self._ph()}"
                     )
                     m_data.append(v)
                 m_where.append(' and '.join(conditions))
@@ -759,7 +890,7 @@ class Datasource:
                     for j in range(i):
                         k, v = cursor_items[j]
                         and_parts.append(
-                            f"{self._quote(k, quote)} = {self.placeholder}"
+                            f"{self._quote(k, quote)} = {self._ph()}"
                         )
                         m_data.append(v)
 
@@ -768,7 +899,7 @@ class Datasource:
                     col_order = order_map.get(k, 'asc')
                     op = self._cursor_operator(direction, col_order)
                     and_parts.append(
-                        f"{self._quote(k, quote)} {op} {self.placeholder}"
+                        f"{self._quote(k, quote)} {op} {self._ph()}"
                     )
                     m_data.append(v)
 
@@ -798,22 +929,32 @@ class Datasource:
             if not isinstance(item, dict):
                 raise ValidationError(f"Invalid filter. dict expected, got: {type(item).__name__} ({item})")
 
-            if 'or' in item:
-                if not isinstance(item['or'], list):
-                    raise ValidationError(f"Expected list for 'or' group, got {type(item['or']).__name__}")
-                sub_sql, sub_vals = self._build_filter_group(item['or'], join='or', _depth=_depth + 1)
-                if sub_sql:
-                    parts.append('(' + sub_sql + ')')
-                    values.extend(sub_vals)
-
-            elif 'and' in item:
-                if not isinstance(item['and'], list):
-                    raise ValidationError(f"Expected list for 'and' group, got {type(item['and']).__name__}")
-                sub_sql, sub_vals = self._build_filter_group(item['and'], join='and', _depth=_depth + 1)
-                if sub_sql:
-                    parts.append('(' + sub_sql + ')')
-                    values.extend(sub_vals)
-
+            group_keys = [k for k in ('or', 'and', 'not') if k in item]
+            if group_keys:
+                if len(item) != 1:
+                    raise ValidationError(
+                        f"Filter group dict must contain only a single group key ('and', 'or', 'not'), got keys: {list(item.keys())}"
+                    )
+                gkey = group_keys[0]
+                if gkey in ('or', 'and'):
+                    if not isinstance(item[gkey], list):
+                        raise ValidationError(f"Expected list for '{gkey}' group, got {type(item[gkey]).__name__}")
+                    sub_sql, sub_vals = self._build_filter_group(item[gkey], join=gkey, _depth=_depth + 1)
+                    if sub_sql:
+                        parts.append('(' + sub_sql + ')')
+                        values.extend(sub_vals)
+                else:  # 'not'
+                    not_content = item['not']
+                    if isinstance(not_content, dict):
+                        sub_filters = [not_content]
+                    elif isinstance(not_content, list):
+                        sub_filters = not_content
+                    else:
+                        raise ValidationError(f"Expected dict or list for 'not' group, got {type(not_content).__name__}")
+                    sub_sql, sub_vals = self._build_filter_group(sub_filters, join='and', _depth=_depth + 1)
+                    if sub_sql:
+                        parts.append('not (' + sub_sql + ')')
+                        values.extend(sub_vals)
             else:
                 sql_frag, vals = self._build_condition_sql(item)
                 parts.append(sql_frag)
@@ -827,107 +968,155 @@ class Datasource:
         Builds SQL fragment and values for a single filter dict.
         Returns (sql_fragment, values_list).
         """
+        field    = f.get('field')
+        operator = f.get('operator')
 
-        field      = f.get('field')
-        operator   = f.get('operator')
         if not operator:
             raise ValidationError(f"Filter is missing required 'operator' key: {f}")
-
-        value      = f.get('value')
-        value_type = f.get('value_type')
-        is_raw     = f.get('raw', False)
-
         if not field:
             raise ValidationError(f"Filter is missing required 'field' key: {f}")
 
-        # SQL three-valued logic: `col = NULL` is never true. Only the
-        # dedicated operators express nullness. None inside IN/BETWEEN is
-        # the same footgun (`IN (NULL)` does not match NULL rows).
-        if operator not in ('null', 'notnull'):
-            if operator in ('in', 'notin', 'between') and isinstance(value, (list, tuple)):
-                if any(v is None for v in value):
-                    raise ValidationError(
-                        f"Operator '{operator}' does not accept None. "
-                        f"Use 'null' or 'notnull' to test for null."
-                    )
-            elif value is None:
-                raise ValidationError(
-                    f"Operator '{operator}' does not accept None. "
-                    f"Use 'null' or 'notnull' to test for null."
-                )
+        kind, values = self._normalize_filter_value(operator, f.get('value'))
 
         sql_frag = self._build_condition(
             col=field,
             searchcriteria=operator,
-            search_value=value,
-            value_type=value_type,
-            raw=is_raw,
+            kind=kind,
+            values=values,
+            value_type=f.get('value_type'),
+            raw=f.get('raw', False),
         )
+        return sql_frag, values
 
-        if operator in ['null', 'notnull']:
-            return sql_frag, []
-        elif operator in ['in', 'notin']:
-            if isinstance(value, (list, tuple)):
-                vals = list(value)
-            else:
-                vals = [value] if value is not None else []
+    def _normalize_filter_value(self, operator: str, value) -> tuple[str, list]:
+        """
+        Returns (kind, values), where kind is one of:
 
-            if not vals:
-                return sql_frag, []
+          'none'    : operator takes no bind value (null / notnull); values == []
+          'scalar'  : operator takes exactly one scalar; values has len 1
+          'list'    : in / notin with a non-empty list; values has len N
+          'empty'   : in / notin with an empty list; values == []
+          'between' : between with exactly two scalars; values has len 2
 
-            return sql_frag, vals
-        elif operator == 'between':
-            return sql_frag, list(value)
-        else:
-            # Every operator that reaches this branch (=, !=, >, contains,
-            # regexp, fts, etc.) binds exactly one scalar parameter. Only
-            # 'in'/'notin'/'between' (handled above) accept a list. Without
-            # this check, a list/tuple/dict slips through as-is and fails
-            # later at the driver with an opaque binding error instead of a
-            # clean ValidationError at the point the bad input was given.
-            if isinstance(value, (list, tuple, dict)):
+        Values are returned ready to bind: wildcard escaping for pattern
+        operators is applied here, so _build_condition_sql can return them
+        unchanged and _build_condition only needs the count to emit the right
+        number of placeholders.
+
+        Single source of truth for "is this filter's value valid, and what
+        shape does it have". Both consumers (WHERE and HAVING, via
+        _build_filter_group -> _build_condition_sql) go through here, so a
+        fix for one operator can no longer land in only one of the two paths
+        (the failure mode behind the 1.2.4 in/notin empty-list bug).
+        """
+        if operator in ('null', 'notnull'):
+            return 'none', []
+
+        if operator in ('in', 'notin'):
+            if isinstance(value, (dict, set, frozenset)):
                 raise ValidationError(
-                    f"Operator '{operator}' expects a single scalar value, "
-                    f"got {type(value).__name__}: {value!r}"
+                    f"Operator '{operator}' expects a scalar or a list, "
+                    f"got {type(value).__name__}."
                 )
-            if operator in self._WILDCARD_OPS and value is not None:
-                escaped_value = self._escape_wildcard_value(value, operator)
-            else:
-                escaped_value = value
-            return sql_frag, [escaped_value]
+            if value is None:
+                raise ValidationError(
+                    f"Operator '{operator}' does not accept None. "
+                    f"Use 'null' or 'notnull' to test for null."
+                )
+            values = list(value) if isinstance(value, (list, tuple)) else [value]
+
+            for v in values:
+                if v is None:
+                    raise ValidationError(
+                        f"Operator '{operator}' does not accept None. "
+                        f"Use 'null' or 'notnull' to test for null."
+                    )
+                if isinstance(v, (list, tuple, dict, set, frozenset)):
+                    raise ValidationError(
+                        f"Operator '{operator}' expects scalar values, "
+                        f"got {type(v).__name__}."
+                    )
+
+            if not values:
+                return 'empty', []
+            if len(values) > MAX_IN_LIST:
+                raise ValidationError(
+                    f"'{operator}' accepts at most {MAX_IN_LIST} values, "
+                    f"got {len(values)}."
+                )
+            return 'list', values
+
+        if operator == 'between':
+            if not isinstance(value, (list, tuple)) or len(value) != 2:
+                raise ValidationError(
+                    f"'between' operator requires a list of two values, "
+                    f"got: {value!r}"
+                )
+            for v in value:
+                if v is None:
+                    raise ValidationError(
+                        "Operator 'between' does not accept None. "
+                        "Use 'null' or 'notnull' to test for null."
+                    )
+                if isinstance(v, (list, tuple, dict, set, frozenset)):
+                    raise ValidationError(
+                        f"Operator 'between' expects scalar values, "
+                        f"got {type(v).__name__}."
+                    )
+            return 'between', list(value)
+
+        # Scalar operators (=, !=, >, contains, regexp, fts, …)
+        if value is None:
+            raise ValidationError(
+                f"Operator '{operator}' does not accept None. "
+                f"Use 'null' or 'notnull' to test for null."
+            )
+        if isinstance(value, (list, tuple, dict, set, frozenset)):
+            raise ValidationError(
+                f"Operator '{operator}' expects a single scalar value, "
+                f"got {type(value).__name__}: {value!r}"
+            )
+
+        if operator in self._WILDCARD_OPS:
+            value = self._escape_wildcard_value(value, operator)
+
+        return 'scalar', [value]
 
     def _build_condition(
         self,
         col: str,
         searchcriteria: str,
-        search_value=None,
+        kind: str,
+        values: list,
         value_type: str | None = None,
-        raw: bool = False
+        raw: bool = False,
     ) -> str:
         if raw and self.allowed_columns is not None:
             raise ValidationError(
                 "raw filters are not permitted when allowed_columns is set."
             )
         if raw and not self.allow_raw_fields:
-            raise ConfigurationError("raw columns/filters are disabled. Set allow_raw_fields=True to enable.")
+            raise ConfigurationError(
+                "raw columns/filters are disabled. Set allow_raw_fields=True to enable."
+            )
 
-        if searchcriteria in ['fts', 'fts_query'] and self.dbms not in ['pg', 'mysql']:
+        if searchcriteria in ('fts', 'fts_query') and self.dbms not in ('pg', 'mysql'):
             raise ValidationError(f"FTS operator not supported for {self.dbms}")
 
         if searchcriteria not in DBMS_MAP[self.dbms]["search_map"]:
             valid = list(DBMS_MAP[self.dbms]['search_map'].keys())
-            raise ValidationError(f"Operator '{searchcriteria}' not valid for {self.dbms}. Valid: {valid}")
+            raise ValidationError(
+                f"Operator '{searchcriteria}' not valid for {self.dbms}. Valid: {valid}"
+            )
 
         raw_statement = DBMS_MAP[self.dbms]["search_map"][searchcriteria]
         quote_char = DBMS_MAP[self.dbms]["quote"]
 
+        cast_suffix = ''
         if raw:
             col_expr = str(col)
-            param_expr = self.placeholder
         else:
             col_expr = self._quote(col, quote_char)
-            param_expr = self.placeholder
-            # Cast only on Pg JSONB paths. 'text' is the JSONB default (no cast).
             if (
                 self.dbms == 'pg'
                 and value_type
@@ -935,50 +1124,37 @@ class Datasource:
             ):
                 _, path = self._parse_jsonb_path(col)
                 if path:
-                    cast_type = value_type.lower()
+                    cast_type = value_type.strip().lower()
                     if cast_type not in self._PG_ALLOWED_CAST_TYPES:
                         raise ValidationError(
                             f"Invalid value_type '{value_type}' for JSONB path. "
                             f"Allowed: {sorted(list(self._PG_ALLOWED_CAST_TYPES))}"
                         )
                     col_expr = f"({col_expr})::{cast_type}"
-                    param_expr = f"{self.placeholder}::{cast_type}"
+                    cast_suffix = f"::{cast_type}"
 
-        if searchcriteria in ['in', 'notin']:
-            # Normalize to a list FIRST, then decide "empty", so this
-            # agrees exactly with the value-list built in
-            # _build_condition_sql. Deciding emptiness on the raw
-            # pre-wrapped value instead (the old order) meant any falsy
-            # scalar - '', 0, False - short-circuited to the 0-placeholder
-            # "1=0"/"1=1" fragment here, while the caller still emitted 1
-            # bound value for it: a placeholder/value-count mismatch that
-            # only surfaces as an opaque driver-level binding error.
-            if not isinstance(search_value, (list, tuple)):
-                search_value = [search_value] if search_value is not None else []
+        def marker() -> str:
+            return self._ph() + cast_suffix
 
-            if len(search_value) > MAX_IN_LIST:
-                raise ValidationError(
-                    f"'{searchcriteria}' accepts at most {MAX_IN_LIST} values, got {len(search_value)}."
-                )
+        if kind == 'none':
+            return raw_statement.format(col=col_expr)
 
-            if searchcriteria == 'in':
-                if not search_value:
-                    return "1 = 0"
-            elif searchcriteria == 'notin':
-                if not search_value:
-                    return "1 = 1"
+        if kind == 'empty':
+            return "1 = 0" if searchcriteria == 'in' else "1 = 1"
 
-            placeholders_str = ", ".join([param_expr] * len(search_value))
+        if kind == 'list':
+            placeholders_str = ", ".join(marker() for _ in values)
             return raw_statement.format(col=col_expr, params=placeholders_str)
 
-        elif searchcriteria == 'between':
-            if not isinstance(search_value, (list, tuple)) or len(search_value) != 2:
-                raise ValidationError(f"'between' operator requires a list of two values, got: {search_value!r}")
-            return raw_statement.format(col=col_expr, param1=param_expr, param2=param_expr)
+        if kind == 'between':
+            return raw_statement.format(
+                col=col_expr, param1=marker(), param2=marker()
+            )
 
+        # kind == 'scalar'
         rendered = raw_statement.format(
             col=col_expr,
-            param=param_expr,
+            param=marker() if '{param}' in raw_statement else '',
             lang=self._safe_sql_literal(self.fts_language),
         )
         rendered += self._wildcard_escape_clause(searchcriteria)
@@ -1206,13 +1382,6 @@ class Datasource:
             )
 
     def _check_allowed_filters(self, filters, _depth: int = 0) -> None:
-        """
-        Walk a client filter tree and apply the column allowlist.
-
-        Does not see scope filters. `raw` is rejected outright: the
-        string is spliced into the query, so it is not a column name
-        that can be allowlisted.
-        """
         if self.allowed_columns is None or not filters:
             return
         if _depth > MAX_FILTER_DEPTH:
@@ -1224,13 +1393,19 @@ class Datasource:
                 continue
             if 'or' in item and isinstance(item['or'], list):
                 self._check_allowed_filters(item['or'], _depth + 1)
-            elif 'and' in item and isinstance(item['and'], list):
+            if 'and' in item and isinstance(item['and'], list):
                 self._check_allowed_filters(item['and'], _depth + 1)
-            elif item.get('raw'):
+            if 'not' in item:
+                not_content = item['not']
+                if isinstance(not_content, dict):
+                    self._check_allowed_filters([not_content], _depth + 1)
+                elif isinstance(not_content, list):
+                    self._check_allowed_filters(not_content, _depth + 1)
+            if item.get('raw'):
                 raise ValidationError(
                     "raw filters are not permitted when allowed_columns is set."
                 )
-            elif isinstance(item.get('field'), str):
+            if isinstance(item.get('field'), str):
                 self._check_allowed_column(item['field'])
 
     def _quote_write_target(self, name: str, quote: str) -> str:
@@ -1333,11 +1508,9 @@ class Datasource:
             return f"{quoted_base}{safe_path}"
 
         if '.' in name:
-            parts = [p.strip() for p in name.split('.') if p.strip()]
-            if not parts:
-                raise InvalidIdentifierError(f"Identifier has no valid segments: {name!r}")
-            if len(parts) > 2:
-                raise InvalidIdentifierError(f"Too many parts in identifier: {name}")
+            parts = [p.strip() for p in name.split('.')]
+            if not all(parts) or len(parts) > 2:
+                raise InvalidIdentifierError(f"Invalid dotted identifier: {name!r}")
             return ".".join(self._quote(p, quote) for p in parts)
 
         escaped_name = name.replace(quote, quote * 2)
@@ -1386,6 +1559,8 @@ class Datasource:
                     dbms='Pg'
                 )
         """
+        if not self.source or not isinstance(self.source, str) or not self.source.strip():
+            raise ConfigurationError("Datasource requires a non-empty string 'source'.")
         self._check_allowed_source()
 
         if self.raw_source:
@@ -1397,15 +1572,54 @@ class Datasource:
             return self.source
         return self._quote(self.source, DBMS_MAP[self.dbms]['quote'])
 
+    @staticmethod
+    def _coerce_limit_int(raw_value, field_name: str):
+        """
+        Coerces an integer-like value from a limit dict.
+
+        Accepts int, a string that parses as an integer (typical of
+        request.args.get), and any numeric type whose value is exactly an
+        integer (float 3.0, Decimal('3'), Fraction(3, 1)).
+
+        Rejects bool (True would silently mean 1), non-integral numerics
+        (2.9 would silently mean 2 under int()), and non-numeric strings.
+
+        Returns None if `raw_value` is None, so the caller can apply the
+        default.
+        """
+        if raw_value is None:
+            return None
+        if isinstance(raw_value, bool):
+            raise ValidationError(
+                f"Limit '{field_name}' must be an integer, got bool."
+            )
+        try:
+            coerced = int(raw_value)
+        except (ValueError, TypeError, OverflowError, ArithmeticError):
+            raise ValidationError(
+                f"Limit '{field_name}' must be an integer."
+            )
+        # Reject silent truncation of fractional values. Strings are exempt:
+        # int('10') is a legitimate form-input path, and it has no fractional
+        # part to lose. Non-string numeric types must survive an exact
+        # round-trip.
+        if not isinstance(raw_value, str) and coerced != raw_value:
+            raise ValidationError(
+                f"Limit '{field_name}' must be an integer, got {raw_value!r}."
+            )
+        return coerced
+
     def _build_limit(self, **kwargs) -> str:
-        raw_start = kwargs.get("start")
+        raw_start  = kwargs.get("start")
         raw_length = kwargs.get("length")
 
-        try:
-            start = int(raw_start) if raw_start is not None else 0
-            length = int(raw_length) if raw_length is not None else DEFAULT_PAGE_LENGTH
-        except (ValueError, TypeError):
-            raise ValidationError("Limit 'start' and 'length' must be integers.")
+        start  = self._coerce_limit_int(raw_start,  "start")
+        length = self._coerce_limit_int(raw_length, "length")
+
+        if start is None:
+            start = 0
+        if length is None:
+            length = DEFAULT_PAGE_LENGTH
 
         if start < 0:
             raise ValidationError("Limit 'start' cannot be negative.")

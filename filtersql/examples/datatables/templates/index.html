@@ -206,7 +206,7 @@ $(document).ready(function() {
         processing: true,
         serverSide: true,
         ajax: {
-            url: '/api/users', 
+            url: '/api/users',
             type: 'GET',
             dataType: 'json',
             error: function(xhr, error, thrown) {
@@ -220,11 +220,11 @@ $(document).ready(function() {
             { data: 'last_name',  render: $.fn.dataTable.render.text() },
             { data: 'email',      render: $.fn.dataTable.render.text() },
             { data: 'age',        render: $.fn.dataTable.render.text() },
-            { 
+            {
                 data: 'status',
                 render: function(data) {
-                    return data === 'active' 
-                        ? '<span class="badge active">Active</span>' 
+                    return data === 'active'
+                        ? '<span class="badge active">Active</span>'
                         : '<span class="badge inactive">Inactive</span>';
                 }
             },
@@ -249,19 +249,20 @@ $(document).ready(function() {
         },
         initComplete: function() {
             var api = this.api();
-            
+
             api.columns().every(function(index) {
                 var column = this;
                 var header = $(column.header());
-                
+
                 var wrapper = $('<div class="table-header-wrapper"></div>');
                 var label = $('<span class="table-header-label"></span>').text(header.text().trim());
                 wrapper.append(label);
-                
+
                 var input = $('<input type="text" class="column-filter" placeholder="Filter...">')
+                    .val(column.search())
                     .appendTo(wrapper)
                     .on('click', function(e) {
-                        e.stopPropagation(); 
+                        e.stopPropagation();
                     })
                     .on('keyup change', function() {
                         var val = $(this).val();
@@ -269,30 +270,27 @@ $(document).ready(function() {
                             column.search(val).draw();
                             updateFilterInfo();
                         }
-                    })
-                    .on('search', function() {
-                        if ($(this).val() === '') {
-                            column.search('').draw();
-                            updateFilterInfo();
-                        }
                     });
-                
+
                 header.empty().append(wrapper);
             });
-            
+
             var filterInfo = $('#filterInfo');
+
+            var badge = $('<span></span>').appendTo(filterInfo);
             var clearBtn = $('<button class="clear-filters-btn">✕ Clear filters</button>')
                 .appendTo(filterInfo)
                 .on('click', function() {
+                    api.state.clear();
                     $('.column-filter').val('');
                     api.columns().every(function() {
                         this.search('');
                     });
-                    api.search(''); // Reset global search too
+                    api.search('');
                     api.draw();
                     updateFilterInfo();
                 });
-            
+
             function updateFilterInfo() {
                 var activeFilters = 0;
                 $('.column-filter').each(function() {
@@ -300,20 +298,20 @@ $(document).ready(function() {
                         activeFilters++;
                     }
                 });
-                
+
                 if (api.search() !== '') {
                     activeFilters++;
                 }
-                
+
                 if (activeFilters > 0) {
-                    filterInfo.html('<span class="filter-badge active">' + activeFilters + ' active filters</span> ');
-                    filterInfo.append(clearBtn);
+                    badge.attr('class', 'filter-badge active')
+                         .text(activeFilters + ' active filters');
                 } else {
-                    filterInfo.html('<span class="filter-badge inactive">No active filters</span> ');
-                    filterInfo.append(clearBtn);
+                    badge.attr('class', 'filter-badge inactive')
+                         .text('No active filters');
                 }
             }
-            
+
             updateFilterInfo();
         },
         searchDelay: 500,
@@ -322,7 +320,7 @@ $(document).ready(function() {
         loadingRecords: 'Loading...',
         processing: '<div style="padding: 20px; text-align: center;">Loading...</div>'
     });
-    
+
     $(document).on('keydown', function(e) {
         if (e.key === 'Escape') {
             $('.clear-filters-btn').click();

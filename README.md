@@ -1,7 +1,7 @@
 # filtersql
 
 [![PyPI version](https://img.shields.io/pypi/v/filtersql)](https://pypi.org/project/filtersql/)
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 **A lightweight Python library that translates structured JSON into safe, parameterized SQL.**
@@ -16,7 +16,7 @@ JSON payload (or Python dicts) → filtersql → SQL string + values list
 
 It is intentionally not an ORM or a connection manager. It builds the query and returns it.
 Query execution remains the responsibility of the caller, making filtersql compatible
-with any Python DB driver (psycopg2, sqlite3, asyncpg, etc.).
+with any Python DB driver (psycopg2, sqlite3, asyncpg, oracledb, etc.).
 
 Designed for three use cases:
 
@@ -26,15 +26,24 @@ Designed for three use cases:
 
 Supports PostgreSQL, SQLite, MySQL, DuckDB and Oracle.
 
-## Features
+## What's new in 1.3.1
 
-- **Python-native & Lightweight** - No ORM required. Works seamlessly with your favorite Python database driver
-- **Secure by default** - Fully parameterized queries, protected against SQL injection
-- **Multi-database support** - PostgreSQL, SQLite, MySQL, DuckDB and Oracle
-- **Language-agnostic** - Clean JSON protocol, perfect for REST APIs and frontend applications
-- **High-performance pagination** - Keyset (cursor-based) pagination, avoiding slow `OFFSET` queries
-- **AI/LLM friendly** - Designed for structured output from large language models
-- **Server-side allowlists** - constrain which columns and sources a client can name, exact-match, no normalization
+- **NOT groups.** `{"not": <filter or list>}` is now a first-class group key alongside `or` / `and`, in both `filters` and `having`. A single dict is negated directly; a list is joined with `AND` and negated as a whole. See [NOT groups](#not-groups).
+- **Oracle numbered binds (`:{n}`).** The default Oracle placeholder is now `:1`, `:2`, … instead of `?`. Numbering is continuous across compound statements (`update()` numbers SET before WHERE; `select()` numbers WHERE before HAVING).
+- **`returning` on SQLite and DuckDB.** `insert(returning=...)` now works on `sqlite` and `duckdb` in addition to `pg`.
+- **`debug()` respects string literals.** Placeholder substitution skips text inside `'…'`, `"…"` and `` `…` ``, so a value that contains the placeholder character or a marker like `:1` does not confuse it.
+- **Stricter validation** (payloads that used to be silently misread now raise `ValidationError` / `InvalidIdentifierError`):
+  - group dicts mixing keys (`{"or": [...], "field": "x"}`);
+  - `in` / `notin` / `between` with nested lists, dicts or sets as elements;
+  - `cursor` values that are `None`, lists, dicts or sets;
+  - duplicate fields in `order`;
+  - an invalid `direction`, even when no `cursor` is given;
+  - `limit.start` / `limit.length` that are `bool` or non-integral numbers (`2.9`); `limit={}` now applies the defaults instead of disabling the limit;
+  - malformed dotted identifiers (`users..name`, `.users`, `users.`) and column aliases containing dots or JSONB operators;
+  - `columns=0` / `False` / `""`;
+  - a `Datasource` without `source` raises `ConfigurationError` at the first query build.
+
+**Upgrading from 1.3.0:** Oracle users will see `:1, :2, …` instead of `?` (same driver, same values). Well-formed payloads are otherwise unaffected. Upgrading from an older release? Read the 1.3.0 notes in [CHANGELOG.md](CHANGELOG.md) first: `reverse_in` was removed and `None` is no longer accepted as a filter value.
 
 ## Why filtersql?
 
@@ -69,7 +78,7 @@ From JSON:
 }
 ```
 
-to SQL:
+to SQL (SQLite dialect, `?` placeholders):
 
 ```SQL
 select
@@ -103,7 +112,7 @@ import filtersql
 
 ds = filtersql.Datasource(
     source='users',
-    dbms='SQLite',
+    dbms='sqlite',
     placeholder='?',
 )
 
@@ -136,11 +145,47 @@ print(values)
 
 ---
 
+## Allowlists (`allowed_columns`, `allowed_sources`)
+
+> New in 1.3. The strongest guardrail filtersql offers for multi-tenant or untrusted-input deployments.
+
+`scope` protects *rows*; allowlists protect *what a client may name*. Both are set server-side when you build the `Datasource` and cannot be supplied via the payload:
+
+```python
+ds = filtersql.Datasource(
+    source          = 'users',
+    dbms            = 'pg',
+    scope           = {'tenant_id': 42},
+    allowed_columns = {'id', 'name', 'status', 'created_at'},
+    allowed_sources = {'users', 'orders'},
+)
+```
+
+With `allowed_columns` set, **every column a client can reference is checked against it**:
+`columns`, `filters` and `having` (including nested `and` / `or` / `not` groups),
+`order`, `group_by`, `cursor`, `returning`, and the keys of `values` and `id`.
+A name that is not listed raises `ValidationError`.
+
+Behavior details:
+
+- **Exact match, nothing is normalized.** `Name`, `name `, `users.name` and a Unicode look-alike are all different strings, and none of them matches `name`. List a column exactly as the client will send it, including a JSONB path like `attributes->>amount`.
+- **`SELECT *` is refused**: `columns` must be given explicitly.
+- **`raw` columns and filters are refused**, even with `allow_raw_fields=True`: a raw string is SQL, not a column name, so it cannot be allowlisted.
+- **`scope` columns do not have to be listed.** Scope is added by the server after the check, so a client that is not allowed to name `tenant_id` can neither filter on it nor set it.
+- An `alias` is an output label, not a column reference, and is not checked.
+- `None` (the default) keeps the old behaviour. An **empty** collection is not "no restriction": it allows nothing.
+
+`allowed_sources` is checked the same way against `source` on every action, and applies to a raw source too (the whole string must be listed). Neither parameter can be supplied in the payload of `filtersql()`.
+
+Use the allowlist as the primary control; identifier validation (no dots, quotes, JSONB paths in write keys) stays underneath it as a safety net for callers that forget to set one.
+
+---
+
 ## Filters
 
 ### Filter format
 
-Every filter is a dict with three keys:
+Every filter is a dict with a `field`, an `operator` and (for most operators) a `value`:
 
 ```python
 {'field': 'status', 'operator': '=', 'value': 'active'}
@@ -174,9 +219,9 @@ Some operators take a list:
 {'field': 'doc_date', 'operator': 'between', 'value': ['2025-01-01', '2025-12-31']}
 ```
 
-### OR groups
+### OR / AND groups
 
-Wrap filters in a dict with key `'or'`:
+Wrap filters in a dict with key `'or'` or `'and'`:
 
 ```python
 filters = [
@@ -189,9 +234,31 @@ filters = [
 # → "status" = ? AND ("first_name" like ? escape '\' OR "last_name" like ? escape '\')
 ```
 
+### NOT groups
+
+`not` takes a single filter dict, or a list of them (joined with `AND`, then negated as a whole):
+
+```python
+filters = [
+    {'field': 'active', 'operator': '=', 'value': 1},
+    {'not': {'field': 'role', 'operator': '=', 'value': 'banned'}},
+]
+# → ("active" = ? AND NOT ("role" = ?))
+
+filters = [
+    {'not': [
+        {'field': 'role',   'operator': '=', 'value': 'guest'},
+        {'field': 'locked', 'operator': '=', 'value': True},
+    ]},
+]
+# → NOT ("role" = ? AND "locked" = ?)
+```
+
+A group dict must contain **exactly one** of `'or'`, `'and'`, `'not'`. Mixing keys — `{'or': [...], 'field': 'x'}` or `{'and': [...], 'or': [...]}` — raises `ValidationError`.
+
 ### Nesting
 
-OR groups can contain AND groups and vice versa:
+Groups can contain groups:
 
 ```python
 filters = [
@@ -206,6 +273,8 @@ filters = [
 # → ("doc_type" = ? OR ("doc_type" = ? AND "amount" >= ?))
 ```
 
+Nesting depth is capped at 32.
+
 ### scope
 
 `scope` is a dict of fixed `field: value` pairs applied as `=` filters to every operation on the Datasource - select, where, update, delete, and insert.
@@ -213,12 +282,11 @@ filters = [
 ```python
 ds = filtersql.Datasource(
     source      = 'documents',
-    dbms        = 'Pg',
+    dbms        = 'pg',
     placeholder = '%s',
     scope       = {'tenant_id': 42},
 )
 
-# scope is always added
 query, values = ds.select(columns=columns, filters=user_filters)
 # → ... WHERE "tenant_id" = %s AND ...
 
@@ -235,49 +303,6 @@ JSONB paths, no quoting. This is what makes the `scope` collision check
 reliable across dialects: a client can't reference a scoped column under a
 different spelling (e.g. `users.tenant_id`, or `tenant_id` with trailing
 whitespace) and slip past the check.
-
-### Allowlists (`allowed_columns`, `allowed_sources`)
-
-`scope` protects *rows*; the allowlists protect *what a client may name*.
-Both are exact-match sets of strings, set server-side when you build the
-`Datasource`:
-
-```python
-ds = filtersql.Datasource(
-    source          = 'users',
-    dbms            = 'Pg',
-    scope           = {'tenant_id': 42},
-    allowed_columns = {'id', 'name', 'status', 'created_at'},
-    allowed_sources = {'users', 'orders'},
-)
-```
-
-With `allowed_columns` set, every column a client can reference is checked
-against it - `columns`, `filters` and `having` (including nested `and`/`or`
-groups), `order`, `group_by`, `cursor`, `returning`, and the keys of
-`values` and `id`. A name that is not listed raises `ValidationError`.
-
-- **Exact match, nothing is normalized.** `Name`, `name `, `users.name` and a
-  Unicode look-alike are all different strings, and none of them matches
-  `name`. List a column exactly as the client will send it, including a
-  JSONB path like `attributes->>amount`.
-- **`SELECT *` is refused**: `columns` must be given explicitly.
-- **`raw` columns and filters are refused**, even with `allow_raw_fields=True`:
-  a raw string is SQL, not a column name, so it cannot be allowlisted.
-- **`scope` columns do not have to be listed.** Scope is added by the server
-  after the check, so a client that is not allowed to name `tenant_id` can
-  neither filter on it nor set it.
-- An `alias` is an output label, not a column reference, and is not checked.
-- `None` (the default) keeps the old behaviour. An **empty** collection is
-  not "no restriction": it allows nothing.
-
-`allowed_sources` is checked the same way against `source` on every action,
-and applies to a raw source too (the whole string must be listed). Neither
-parameter can be supplied in the payload of `filtersql()`.
-
-Use the allowlist as the primary control; identifier validation (no dots,
-quotes, JSONB paths in write keys) stays underneath it as a safety net for
-callers that forget to set one.
 
 ---
 
@@ -302,11 +327,11 @@ columns = ['id', 'first_name', 'last_name']
 ```
 
 Raw expressions with `raw=True`, but since this bypasses quoting/escaping entirely
-never pass untrusted input as field when set, and remember to set `allow_raw_fields=True`
+never pass untrusted input as `field` when set, and remember to set `allow_raw_fields=True`
 on the corresponding Datasource:
 
 ```python
-ds = filtersql.Datasource(source='users', dbms='Pg', allow_raw_fields=True)
+ds = filtersql.Datasource(source='users', dbms='pg', allow_raw_fields=True)
 
 columns = [
     {'field': 'COUNT(*) as total', 'raw': True},
@@ -314,7 +339,8 @@ columns = [
 ]
 ```
 
-Note: `raw=True` bypasses quoting/escaping entirely — never pass untrusted input as field when set.
+`raw=True` is refused when `allowed_columns` is set — a raw string is SQL, not a column name, and cannot be allowlisted.
+
 ---
 
 ## Raw source (`raw_source`)
@@ -335,7 +361,7 @@ ds = filtersql.Datasource(
     source="(SELECT * FROM users WHERE active = true) AS active_users",
     raw_source=True,
     allow_raw_source=True,
-    dbms='Pg'
+    dbms='pg'
 )
 ```
 
@@ -348,7 +374,7 @@ ds = filtersql.Datasource(
     source=request.GET.get('table'),
     raw_source=True,
     allow_raw_source=True,
-    dbms='Pg'
+    dbms='pg'
 )
 ```
 
@@ -364,7 +390,7 @@ query, values = ds.insert(
     values = {'first_name': 'John', 'last_name': 'Smith'},
 )
 
-# insert with returning (PostgreSQL only)
+# insert with returning (PostgreSQL, SQLite, DuckDB)
 query, values = ds.insert(
     values    = {'first_name': 'John'},
     returning = 'id',
@@ -393,7 +419,7 @@ in `select()` for non-key filtering.
 When you want to inject filters into your own handwritten query:
 
 ```python
-ds = filtersql.Datasource(source='documents', dbms='Pg', placeholder='%s')
+ds = filtersql.Datasource(source='documents', dbms='pg', placeholder='%s')
 
 where_clause, values = ds.where(filters=[
     {'field': 'doc_type', 'operator': '=',  'value': 'CONTRACT'},
@@ -412,9 +438,13 @@ query = f"""
 """
 ```
 
+> **Numbered placeholders (Oracle, or a custom `{n}` placeholder):** `where()` always numbers from `:1`. If your handwritten query already has its own binds, they will collide, so build the whole statement with `select()` instead, or use named binds in your own SQL.
+
+---
+
 ## Group By and Having
 
-`filtersql` now supports `GROUP BY` and `HAVING` for aggregations and analytics.
+`filtersql` supports `GROUP BY` and `HAVING` for aggregations and analytics.
 
 ```python
 query, values = ds.select(
@@ -429,11 +459,13 @@ query, values = ds.select(
 )
 ```
 
+Note: `having` needs `raw: True` on aggregate expressions like `count(*)` (same reason as columns). With `allowed_columns` set, `raw` is refused, so an allowlist is incompatible with aggregate HAVING — use a SQL view or a handwritten query instead.
+
 ---
 
 ## filtersql() - convenience function
 
-Builds any query from a single payload dict. Useful for REST APIs and AI-generated actions:
+Builds any query from a single payload dict. `dbms` is a **required** server-side parameter.
 
 ```python
 from filtersql import filtersql
@@ -447,12 +479,14 @@ query, values = filtersql(
         'order':   [{'field': 'id', 'order': 'asc'}],
         'limit':   {'start': 0, 'length': 10},
     },
-    dbms        = 'Pg',
+    dbms        = 'pg',
     placeholder = '%s',
 )
 ```
 
 Supported actions: `select`, `insert`, `update`, `delete`.
+
+Server-side configuration parameters (`dbms`, `scope`, `placeholder`, `fts_language`, `allowed_columns`, `allowed_sources`, `allow_raw_fields`, `allow_raw_source`, `raw_source`) must be passed as **named arguments** to `filtersql()`. Passing any of them inside the payload or via `**kwargs` raises `ValidationError`.
 
 ---
 
@@ -472,7 +506,9 @@ print(ds.debug(query, values))
 #   ("first_name" ilike '%John%' escape '\')
 ```
 
-> Disabled by default — set FILTERSQL_DEBUG=1 in your environment to enable, since this should never run in production
+> Disabled by default — set `FILTERSQL_DEBUG=1` in your environment to enable, since this should never run in production.
+
+Placeholder substitution ignores text inside string literals, so a value that happens to contain the placeholder character (e.g. `"what?"` with `placeholder='?'`) does not confuse the substitution.
 
 ---
 
@@ -491,14 +527,33 @@ use patterns (`contains`, `starts_with`, etc.). Other operators
 
 ---
 
+## Limits
+
+`filtersql` enforces a small set of limits, all raising `ValidationError` when exceeded:
+
+| Limit | Value |
+|---|---|
+| `limit.length` (per query) | 10 000 |
+| Values per `in` / `notin` | 1 000 |
+| Nesting depth of `or` / `and` / `not` | 32 |
+
+`limit.start` must be `>= 0`; `limit.length` must be `>= 1`. Both must be integers (or strings / integral numbers that convert exactly, like `"10"` or `3.0`); `2.9`, `True` and `NaN` are rejected. `limit={}` applies the defaults (`start=0`, `length=100`); only `None` means "no limit".
+
+---
+
 ## AI / LLM pipelines
 
 LLMs should never generate SQL directly. They should generate structured intent. `filtersql` validates that intent and compiles it into parameterized SQL.
-The values are always parameterized - no SQL injection risk even if the model produces unexpected output.
 
 ```
 user question → LLM → JSON → filtersql → parameterized SQL
 ```
+
+Values are always bound as parameters, so a model cannot inject SQL through a value. What a model *can* still do is name columns and tables you did not intend to expose. Close that with the server-side guardrails, which the payload cannot override:
+
+- `allowed_columns` / `allowed_sources`: exact-match allowlists (see [Allowlists](#allowlists-allowed_columns-allowed_sources))
+- `scope`: fixed row filters such as `tenant_id`
+- `raw` columns/filters and `raw_source` stay off unless you enable them
 
 ```python
 # DANGEROUS!
@@ -507,8 +562,15 @@ query = f"SELECT * FROM users WHERE {llm_output}"  # SQL injection waiting to ha
 
 # with filtersql
 payload = json.loads(llm_response)
-query, values = filtersql(payload, dbms='Pg', placeholder='%s')
-cursor.execute(query, values)  # always parameterized, always safe
+query, values = filtersql(
+    payload,
+    dbms            = 'pg',
+    placeholder     = '%s',
+    allowed_sources = {'users'},
+    allowed_columns = {'id', 'first_name', 'last_name', 'status'},
+    scope           = {'tenant_id': current_tenant},
+)
+cursor.execute(query, values)
 ```
 
 The simplest version without Pydantic:
@@ -516,6 +578,7 @@ The simplest version without Pydantic:
 > Note: the schema below restricts `value` to a plain string, so it only
 > works with scalar operators (`=`, `icontains`, etc.). Operators that need
 > a list (`in`, `between`) require widening `value`'s schema type accordingly.
+> `client` is a `genai.Client()` you create beforehand.
 
 ```python
 import json
@@ -525,6 +588,7 @@ from filtersql import filtersql
 SCHEMA = {
     "type": "OBJECT",
     "properties": {
+        "action": {"type": "STRING", "enum": ["select"]},
         "source": {"type": "STRING", "enum": ["users", "contracts"]},
         "filters": {
             "type": "ARRAY",
@@ -539,7 +603,7 @@ SCHEMA = {
             }
         }
     },
-    "required": ["source", "filters"]
+    "required": ["action", "source", "filters"]
 }
 
 response = client.models.generate_content(
@@ -554,19 +618,23 @@ response = client.models.generate_content(
 )
 
 payload = json.loads(response.text)
-query, values = filtersql(payload, action='select', dbms='SQLite', placeholder='?')
+query, values = filtersql(
+    payload, dbms='sqlite', placeholder='?',
+    allowed_sources = {'users', 'contracts'},
+    allowed_columns = {'id', 'name', 'status', 'created_at'},
+)
 ```
 
 With Pydantic for stricter validation:
 
 ```python
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from typing import List, Literal
 
 class SQLFilter(BaseModel):
     field: str
     operator: Literal[
-        '=', '!=', '>', '>=', '<', '<=', 
+        '=', '!=', '>', '>=', '<', '<=',
         'contains', 'not_contains', 'icontains', 'not_icontains',
         'starts_with', 'not_starts_with', 'istarts_with', 'not_istarts_with',
         'ends_with', 'not_ends_with', 'iends_with', 'not_iends_with',
@@ -582,7 +650,10 @@ class QuerySchema(BaseModel):
 parsed = QuerySchema.model_validate_json(response.text)
 filters = [f.model_dump() for f in parsed.sql_filters]
 
-ds = filtersql.Datasource(source='documents', dbms='Pg', placeholder='%s')
+ds = filtersql.Datasource(
+    source='documents', dbms='pg', placeholder='%s',
+    allowed_columns={'title', 'doc_type', 'doc_date'},
+)
 where_clause, values = ds.where(filters=filters)
 ```
 
@@ -605,7 +676,7 @@ If a frontend or LLM passes an empty array as a filter value (e.g. unselected ch
 # → ("attributes"->>'expiry')::date <= %s::date
 ```
 
-Without the cast, `'9' > '10'` as text gives wrong results for numeric ranges.
+Without the cast, `'9' > '10'` as text gives wrong results for numeric ranges. `value_type` is only honored on Pg JSONB paths; it is ignored on plain columns.
 
 ---
 
@@ -616,7 +687,7 @@ Navigates large tables without OFFSET - no performance degradation.
 ```python
 ds = filtersql.Datasource(
     source = 'documents',
-    dbms   = 'Pg',
+    dbms   = 'pg',
     order  = [{'field': 'id', 'order': 'asc'}],
 )
 
@@ -653,7 +724,7 @@ Multi-column cursors work too:
 ```python
 ds = filtersql.Datasource(
     source = 'documents',
-    dbms   = 'Pg',
+    dbms   = 'pg',
     order  = [
         {'field': 'last_name',  'order': 'asc'},
         {'field': 'first_name', 'order': 'asc'},
@@ -666,6 +737,10 @@ query, values = ds.select(
     direction = 'next',
 )
 ```
+
+Every cursor key must appear in `order`, and every order field must appear in the cursor, for `next` / `prev`. Both violations raise `ValidationError`.
+
+Cursor values must be scalars. `None`, lists, dicts and sets are rejected: `col > NULL` never matches, so a null cursor would silently return no rows. `order` may not list the same field twice, and `direction` must be one of `seek` / `next` / `prev` even when no `cursor` is given (`prev` alone just inverts the sort).
 
 ---
 
@@ -692,6 +767,8 @@ ds = filtersql.Datasource(..., fts_language='italian')
 # → match("content") against(? in boolean mode)
 ```
 
+On MySQL, `fts_query` is an alias of `fts` (both rely on `MATCH ... AGAINST`, which requires a `FULLTEXT` index). It does not vectorize on the fly like PostgreSQL's `fts_query`.
+
 ---
 
 ## Filter operators
@@ -711,7 +788,7 @@ ds = filtersql.Datasource(..., fts_language='italian')
 | `regexp` / `not_regexp` | Case-sensitive regular expression / exclusion |
 | `iregexp` / `not_iregexp`| Case-insensitive regexp / exclusion |
 | `fts` | Full-text search on indexed column (Pg, MySQL) |
-| `fts_query` | Full-text search on text column (Pg only) |
+| `fts_query` | Full-text search on text column (Pg); alias of `fts` on MySQL |
 
 ---
 
@@ -723,18 +800,20 @@ ds = filtersql.Datasource(..., fts_language='italian')
 | SQLite | `'sqlite'` | `?` |
 | DuckDB | `'duckdb'` | `?` |
 | MySQL | `'mysql'` | `%s` |
-| Oracle | `'oracle'` | `?` |
+| Oracle | `'oracle'` | `:{n}` (numbered) |
 
-`dbms` is case-insensitive - `'pg'`, `'PG'`, `'Pg'` are all equivalent.
-Unrecognized names (e.g. `'postgres'`) still raise a `ConfigurationError`
-listing the valid names above.
+`dbms` is case-insensitive - `'pg'`, `'PG'`, `'Pg'` are all equivalent. Unrecognized names (e.g. `'postgres'`) raise a `ConfigurationError` listing the valid names above.
+
+`oracle` uses numbered binds (`:1`, `:2`, …) automatically. You do not need to set `placeholder` manually for Oracle.
 
 Override with any placeholder your driver expects:
 
 ```python
 ds = filtersql.Datasource(..., placeholder='%s')
-ds = filtersql.Datasource(..., placeholder='$1')
+ds = filtersql.Datasource(..., placeholder='${n}')  # numbered: $1, $2, …
 ```
+
+A custom placeholder may contain `{n}` at most once. Without `{n}` the placeholder is used as-is for every value (`'$'` gives `$`, `$`, …, not `$1`, `$2`).
 
 ---
 

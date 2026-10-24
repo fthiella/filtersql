@@ -2,6 +2,178 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.1] - 2026-10-24
+
+### Added
+- **NOT groups**: `{"not": <filter-or-list>}` is a new group key alongside
+  `or` and `and`. A single dict is negated directly; a list is joined with
+  `AND` and negated as a whole. A group dict that mixes keys (`{"or":
+  [...], "field": "x"}`, `{"and": [...], "or": [...]}`) now raises
+  `ValidationError` — previously the second key was silently ignored.
+- **Oracle numbered binds**: Oracle's default placeholder is now `:{n}`
+  (e.g. `:1`, `:2`, …) so a single statement can bind values positionally.
+  Numbering is continuous across a compound statement: `update()` numbers
+  SET values before WHERE values; `select()` numbers WHERE values before
+  HAVING values. A custom `placeholder` may contain `{n}` at most once.
+- **`returning` on SQLite and DuckDB**: `insert(returning=...)` now works
+  on `sqlite` and `duckdb` in addition to `pg`. Still rejected on `mysql`
+  and `oracle`.
+- **`debug()` respects string literals**: placeholder substitution now
+  skips text inside `'…'`, `"…"`, and `` `…` `` (with correct `''`
+  doubling), so a string value that happens to contain the placeholder
+  character (or a numbered bind like `:1`) is not confused with a real
+  bind slot.
+
+### Fixed
+- **Oracle `:{n}` bind numbering is thread-safe.** `_bind_n` was an
+  instance attribute, so a `Datasource` shared across threads (the
+  module-level pattern the README recommends for web servers) produced
+  corrupted bind numbers under concurrency: one thread's
+  `_begin_binds()` reset the counter while another was still
+  incrementing it, producing sequences like `:2, :3, …, :7` instead of
+  `:1, :2, …, :6`. Moved to `threading.local`, reset by
+  `_begin_binds()` at the top of every build. No API change.
+- **`Datasource` remains picklable.** Adding `threading.local` for the
+  bind counter would have broken `pickle.dumps(ds)` and
+  `copy.deepcopy(ds)` with `TypeError: cannot pickle '_thread._local'
+  object`. Implemented `__getstate__` / `__setstate__` to drop and
+  recreate the thread-local storage on (de)serialization. Applies to
+  every dialect, not just Oracle.
+- **`_build_limit()` rejects `bool`**: `limit={'length': True}` used to
+  be coerced to `1` by `int()`; `limit={'start': False}` to `0`. Both
+  now raise `ValidationError`.
+- **`_quote()` rejects malformed dotted identifiers**: `users..name`,
+  `.users`, `users.`. Previously the empty segment was silently dropped
+  and the identifier resolved to a plausible-looking but different
+  string. (`a.b.c` was already rejected; unchanged.)
+- **Column `alias` is validated as a bare identifier** via
+  `_quote_write_target()`. An alias containing a dot (`table.alias`) or
+  a JSONB operator (`data->>key`) is now rejected with
+  `InvalidIdentifierError` instead of being quoted verbatim.
+- **`Datasource` without `source` raises `ConfigurationError`** from
+  `_resolve_source()` with a clear message. Previously surfaced as
+  `InvalidIdentifierError` from `_quote`, whose wording ("cannot be
+  empty") was easy to confuse with a field-name problem.
+- **Filter value normalization lives in one place.**
+  `_build_condition_sql` and `_build_condition` used to duplicate the
+  rules for `in`/`notin`/`between`/`null` — the structural reason
+  behind the 1.2.4 empty-list mismatch, where the two halves disagreed
+  about whether a falsy value was "empty". Both now go through a single
+  `_normalize_filter_value()`, which returns the value shape (`none` /
+  `scalar` / `list` / `empty` / `between`) plus the values to bind.
+  `_build_condition()` only needs the shape to decide how many
+  placeholders to emit; it no longer reasons about operators.
+  `between` still requires exactly two values (the check moved from
+  `_build_condition` to `_normalize_filter_value`, behaviour
+  unchanged). JSONB detection inside `_build_condition` now goes
+  through `_parse_jsonb_path()` instead of `col.split('->>')`.
+  `value_type` is stripped before validation, so `' numeric '` is
+  accepted alongside `'numeric'`.
+- **`direction` is validated even without a cursor.** `where()` gated
+  the enum check on `cursor` being present, so `direction="sideways"`
+  (or any other invalid value) with no cursor was silently a no-op on
+  `ORDER BY`. A `direction` without a cursor is meaningful — it
+  inverts the sort order for `prev` — so an invalid one must be
+  rejected regardless of whether a cursor is provided. The check now
+  runs unconditionally on `active_direction is not None`, before the
+  keyset-pagination block.
+- **`in` / `notin` / `between` reject non-scalar elements.** A payload
+  like `{"field": "id", "operator": "in", "value": [{}]}` was compiled
+  into `"id" in (?)` with `[{}]` bound. Parameterization prevents SQL
+  injection, but the driver then fails with an opaque binding error
+  (`can't adapt type 'dict'` on psycopg2, `InterfaceError` on sqlite3,
+  `TypeError` on asyncpg). Nested lists, tuples, dicts, sets and
+  frozensets inside `in`/`notin`/`between`, and a dict, set or
+  frozenset as the value of `in`/`notin`, now raise `ValidationError`
+  before any SQL is generated. The same rule applies symmetrically to
+  scalar operators (`=`, `contains`, `regexp`, `fts`, …): container
+  values are rejected at build time. Valid scalar values (`str`, `int`,
+  `float`, `bool`, `bytes`, `date`, `Decimal`, `UUID`) are unchanged.
+- **`cursor` values must be scalars.** `None`, lists, tuples, dicts and
+  sets as a cursor value now raise `ValidationError`. SQL
+  three-valued logic makes `col > NULL` never match, so a `None`
+  cursor value used to build a valid query that silently returned
+  zero rows. Use a `null`/`notnull` filter to test for NULL.
+- **`limit.start` / `limit.length` reject non-integral numbers.** A
+  value such as `{"length": 2.9}` was silently truncated to `2` by the
+  `int(raw_length)` coercion in `_build_limit()`. Booleans were already
+  rejected (since a prior fix); this closes the remaining silent
+  truncation. Non-integral `float`, `Decimal`, and `Fraction` now raise
+  `ValidationError` with the offending value in the message.
+  Integer-valued numerics (`3.0`, `Decimal('3')`, `Fraction(3, 1)`) are
+  accepted as their int equivalent, and strings that `int()` parses
+  (`"10"`) continue to work — both are real use cases (computed limits,
+  `request.args.get`). The validation lives in a new helper,
+  `_coerce_limit_int`, applied symmetrically to `start` and `length`.
+- **`OverflowError` caught in `_coerce_limit_int`.** `int(float('inf'))`
+  and `int(Decimal('Infinity'))` raise `OverflowError`, not `ValueError`,
+  and used to escape the try/except. Now caught with the same
+  `ValidationError` message. `Decimal('NaN')` (`decimal.InvalidOperation`,
+  an `ArithmeticError`) is caught the same way.
+- **`limit={}` no longer disables the LIMIT clause.** A falsy-dict check
+  in `select()` (`if active_limit:`) treated `{}` like "no limit",
+  emitting no LIMIT and returning every row. Only `None` means "no
+  limit"; `{}` now applies the built-in defaults (`start=0`,
+  `length=DEFAULT_PAGE_LENGTH`), same as an explicit `limit={}` in a
+  frontend payload.
+- **`order` rejects duplicate fields.** `order=[{"field": "id"},
+  {"field": "id"}]` used to compile into `ORDER BY "id" asc, "id"
+  desc`, where the second key was inert. Worse, in keyset pagination
+  the duplicate would produce two bind entries for the same column,
+  because `_build_where` builds `cursor_items` from the raw `order`
+  list, not from the deduped `order_map`. Both are now rejected with
+  `ValidationError` at `_validate_order` time.
+- **`columns=0` / `columns=False` / `columns=""` rejected.** The
+  expression `columns = columns or []` silently converted any falsy
+  non-`None` value to an empty list, which then meant `SELECT *`. Only
+  `None` is treated as "no columns". (`filters`, `group_by`, `having`,
+  `order` already used `is not None` first; no change there.)
+
+### Tests
+- New coverage for `not` groups (single dict, list form, nested with
+  `or`/`not`/`and`, invalid type, hybrid rejection, allowlist
+  enforcement inside `not`, raw filters inside `not`).
+- New coverage for Oracle numbered binds across `select` and `update`,
+  including a `debug()` case with a string value that contains literal
+  `:1` and `:2` markers, and a concurrency test that builds the same
+  query from multiple threads and asserts a single well-formed SQL.
+- New coverage for `pickle`/`copy` round-trip of a configured
+  `Datasource`, including an Oracle instance with `_numbered=True`.
+- New coverage for `limit` bool and non-integral rejection, malformed
+  dotted identifiers, alias validation, `returning` on
+  `sqlite`/`duckdb`, and `Datasource` without `source`.
+- New coverage for duplicate `order` fields, `direction` validation
+  without a cursor, non-scalar and `None` cursor values, non-scalar
+  elements in `in`/`notin`/`between`, non-integral and non-finite
+  `limit` values, `limit={}`, and falsy non-`None` `columns`.
+
+### Notes
+- No breaking changes for well-formed payloads. Two behaviour changes
+  affect callers, both tighten validation of previously-accepted
+  inputs:
+  - `dbms='oracle'` callers who did not set a custom `placeholder`
+    now see `:1`, `:2`, … instead of `?`. Callers who set
+    `placeholder='?'` explicitly are unaffected. Same driver, same
+    values; only the marker syntax changes.
+  - Payloads that pass `None` as a `cursor` value, pass the same field
+    twice in `order`, or pass container values where a scalar is
+    expected now raise `ValidationError` instead of being silently
+    accepted or crash at the driver.
+- `allowed_columns` / `allowed_sources` (introduced in 1.3.0) now
+  recurse into `not` groups, same as `or` / `and`.
+- The `Datasource` remains stateless across queries. The only mutable
+  state is the per-thread bind counter used by Oracle's `:{n}`
+  placeholder; it lives in `threading.local` and is reset at the start
+  of every build.
+- Upgrade checklist:
+  - If you use Oracle, make sure nothing assumes `?` placeholders.
+  - Check that no code passes `None`, lists or dicts as `cursor`
+    values, or the same field twice in `order`. Both used to be
+    accepted and now raise `ValidationError`.
+  - If you call `pickle.dumps(ds)` or `copy.deepcopy(ds)`, verify the
+    result still round-trips; the `_local` attribute is dropped from
+    the pickled form and recreated on unpickling.
+
 ## [1.3.0] - 2026-10-12
 
 ### Added

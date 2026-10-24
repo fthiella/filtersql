@@ -1,17 +1,32 @@
+# -*- coding: utf-8 -*-
+"""
+filtersql + Cursor Pagination & CRUD Editor
+=============================================================
+Demonstrates cursor-based pagination and safe CRUD operations via a generic API gateway.
+"""
+
 from flask import Flask, request, jsonify, render_template
 import sqlite3
 from filtersql import filtersql, FilterSQLError
 
-# WARNING: this example has no authentication and no authorization.
-# It is intended for local development only. Do not expose it to a network.
-
 app = Flask(__name__)
-
 DB_FILE = 'demo.db'
+
+# ============================================================================
+# SECURITY POLICY & ALLOWLISTS (filtersql 1.3.1)
+# ============================================================================
+
+ALLOWED_TABLES = {
+    'users': {'id', 'first_name', 'last_name', 'email', 'age', 'status', 'role', 'tenant_id'},
+#    'contracts': {'id', 'tenant_id', 'contract_number', 'amount', 'status', 'created_at'},
+#    'resolutions': {'id', 'tenant_id', 'title', 'body', 'date'}
+}
+
+# Server-side multi-tenant boundary example (optional, can be adapted per session/auth)
+DEFAULT_TENANT_ID = 42
 
 def get_db_connection():
     conn = sqlite3.connect(DB_FILE)
-    # Enable name-based access to columns (similar to RealDictCursor in Postgres)
     conn.row_factory = sqlite3.Row 
     return conn
 
@@ -22,24 +37,28 @@ def index():
 @app.route('/api/<source>/<action>', methods=['POST'])
 def api_gateway(source, action):
     
-    # 1. Security Whitelist
-    # Hardcoded definitions to prevent arbitrary table access or execution
-    allowed_tables = ['users', 'contracts', 'resolutions']
-    allowed_actions = ['select', 'insert', 'update', 'delete']
-    
-    if source not in allowed_tables or action not in allowed_actions:
+    # 1. Security Table & Action Whitelist
+    if source not in ALLOWED_TABLES or action not in ('select', 'insert', 'update', 'delete'):
         return jsonify({'status': 'error', 'message': 'Endpoint or operation not allowed'}), 403
 
     # 2. Payload Extraction
     payload = request.json or {}
     
+    # Restrict columns allowed for this table using filtersql 1.3.1 allowlists
+    table_allowed_columns = ALLOWED_TABLES[source]
+    
+    # FIX: When allowed_columns is active, SELECT * is disallowed. 
+    # If the client did not send explicit columns for a select action, provide all allowed columns as default.
+    if action == 'select' and not payload.get('columns'):
+        payload['columns'] = list(table_allowed_columns)
+    
     try:
-        # 3. Call filtersql for SQLite
-        # Note: Specifying 'SQLite' ensures the engine uses the correct text search 
-        # syntax (GLOB) and positional parameter binding (?)
+        # 3. Call filtersql with strict allowlists and scope enforcement
         query, params = filtersql(
             {**payload, 'action': action, 'source': source},
-            dbms='SQLite'
+            dbms='sqlite',
+            allowed_columns=table_allowed_columns,
+            scope={'tenant_id': DEFAULT_TENANT_ID}
         )
 
         # 4. Database Execution
@@ -49,18 +68,16 @@ def api_gateway(source, action):
             
             # LOGICAL FORK: Read vs. Write operations
             if action == 'select':
-                # Convert SQLite Row objects to standard Python dictionaries for JSON serialization
                 records = [dict(row) for row in cur.fetchall()]
                 
                 return jsonify({
                     'status': 'ok',
                     'data': records,
-                    'debug_sql': query,    # unsafe, remove in production
-                    'debug_params': params # unsafe, remove in production
+                    'debug_sql': query,
+                    'debug_params': params
                 })
                 
             else:
-                # Commit mutations (Insert/Update/Delete) and fetch affected rows
                 conn.commit()
                 rows_affected = cur.rowcount
                 
@@ -73,13 +90,9 @@ def api_gateway(source, action):
                 })
                 
     except FilterSQLError as e:
-        # Validation / Configuration errors - the payload was rejected.
-        # This is the client's fault.
         return jsonify({'status': 'error', 'message': str(e)}), 400
 
     except sqlite3.IntegrityError as e:
-        # Constraint violation (UNIQUE, FK, NOT NULL) - the payload
-        # conflicts with the current database state.
         return jsonify({
             'status': 'error',
             'message': 'Database integrity violation.',
@@ -87,11 +100,9 @@ def api_gateway(source, action):
         }), 400
 
     except Exception:
-        # Anything else is a bug or an infrastructure failure on our side.
-        # Log the traceback for debugging, return a generic message to
-        # the client (don't leak internal details).
         app.logger.exception("unhandled error in /api/%s/%s", source, action)
         return jsonify({'status': 'error', 'message': 'Internal server error'}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    # use_reloader=False prevents watchdog from crashing/reloading on third-party site-packages changes
+    app.run(debug=True, use_reloader=False, port=5000)

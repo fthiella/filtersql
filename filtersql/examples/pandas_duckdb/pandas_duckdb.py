@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Cookbook: filtersql + Pandas + DuckDB
 Query DataFrame with SQL using filtersql
@@ -7,6 +8,7 @@ import pandas as pd
 import duckdb
 from filtersql import filtersql
 
+# Sample DataFrame
 df = pd.DataFrame({
     'id': [1, 2, 3, 4, 5],
     'first_name': ['John', 'Robert', 'Brian', 'Mick', 'Paul'],
@@ -19,14 +21,21 @@ print("Original DataFrame:")
 print(df)
 print("\n" + "="*50 + "\n")
 
+# Connect to DuckDB in-memory and register the DataFrame as a table named 'users'
 conn = duckdb.connect()
 conn.register('users', df)
 
 def query_to_df(payload, **kwargs):
     """Helper: filtersql → DuckDB → DataFrame"""
-    query, params = filtersql(payload, dbms='DuckDB', allow_raw_fields=True, **kwargs)
-    print(query)
-    print(params)
+    # dbms='duckdb' is case-insensitive, allow_raw_fields enables COUNT(*) raw columns
+    query, params = filtersql(
+        payload, 
+        dbms='duckdb', 
+        allow_raw_fields=True, 
+        **kwargs
+    )
+    print(f"Generated SQL:\n{query.strip()}")
+    print(f"Parameters: {params}")
     return conn.execute(query, params).fetchdf()
 
 print("1. Active users:\n")
@@ -38,7 +47,6 @@ result = query_to_df({
 })
 print(result)
 print("\n" + "-"*30 + "\n")
-
 
 print("2. Active users, age >= 30:\n")
 result = query_to_df({
@@ -53,7 +61,6 @@ result = query_to_df({
 })
 print(result)
 print("\n" + "-"*30 + "\n")
-
 
 print("3. Count by status:\n")
 result = query_to_df({

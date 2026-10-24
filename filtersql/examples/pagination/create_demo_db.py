@@ -3,6 +3,8 @@ import sqlite3
 import random
 from filtersql import Datasource
 
+random.seed(42)
+
 FIRST_NAMES = [
     'John', 'Jane', 'Alice', 'Bob', 'Carlo', 'Maria', 'Luca', 'Sara', 'Cliff', 'Thomas',
     'Emma', 'Oliver', 'Sophia', 'Liam', 'Isabella', 'Mason', 'Mia', 'Ethan', 'Amelia', 'Logan',
@@ -20,47 +22,45 @@ LAST_NAMES = [
 ]
 
 ROLES = ['admin', 'editor', 'viewer']
-
 STATUSES = ['active', 'inactive']
-
-PROVIDERS = [
-    'demo.net', 'example.com', 'test.org', 'null.org',
-    'mockmail.com', 'fakemail.net', 'sample.org', 'devmail.local',
-    'sandbox.com', 'testing.net', 'void.org', 'local.host',
-    'noreply.com', 'dummy.net', 'temp.org', 'corp.local',
-    'company.com', 'testbed.net', 'lab.org', 'internal.net'
-]
+PROVIDERS = ['demo.net', 'example.com', 'test.org', 'null.org', 'mockmail.com']
 
 conn = sqlite3.connect('demo.db')
 conn.execute('DROP TABLE IF EXISTS users')
 conn.execute('''
     CREATE TABLE users (
-        id         INTEGER PRIMARY KEY AUTOINCREMENT,
-        first_name TEXT NOT NULL,
-        last_name  TEXT NOT NULL,
-        email      TEXT NOT NULL,
-        age        INTEGER,
-        status     TEXT,
-        role       TEXT
+        id            INTEGER PRIMARY KEY AUTOINCREMENT,
+        tenant_id     INTEGER NOT NULL,
+        first_name    TEXT NOT NULL,
+        last_name     TEXT NOT NULL,
+        email         TEXT NOT NULL,
+        age           INTEGER,
+        status        TEXT,
+        role          TEXT,
+        password_hash TEXT
     )
 ''')
 conn.commit()
 
-ds = Datasource(source='users', dbms='SQLite', placeholder='?')
+ds = Datasource(source='users', dbms='sqlite')
 
 for i in range(500):
     first = random.choice(FIRST_NAMES)
     last  = random.choice(LAST_NAMES)
+    tenant = 42 if random.random() < 0.9 else 99
+    
     query, values = ds.insert(values={
-        'first_name': first,
-        'last_name':  last,
-        'email':      f'{first.lower()}.{last.lower()}{i}@{random.choice(PROVIDERS)}',
-        'age':        random.randint(20, 65),
-        'status':     random.choice(STATUSES),
-        'role':       random.choice(ROLES),
+        'tenant_id':    tenant,
+        'first_name':   first,
+        'last_name':    last,
+        'email':        f'{first.lower()}.{last.lower()}{i}@{random.choice(PROVIDERS)}',
+        'age':          random.randint(20, 65),
+        'status':       random.choice(STATUSES),
+        'role':         random.choice(ROLES),
+        'password_hash': f'hash_{i}'
     })
     conn.execute(query, values)
 
 conn.commit()
 conn.close()
-print("demo.db created with 500 rows")
+print("demo.db successfully created with 500 rows (distributed between tenant 42 and 99).")

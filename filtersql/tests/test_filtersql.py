@@ -512,16 +512,20 @@ class TestInsert(unittest.TestCase):
         self.assertIn('%s', q)
         self.assertEqual(v, ['John', 'Smith'])
 
-    def test_insert_returning(self):
-        ds = make_ds()
-        q, v = ds.insert(values={'first_name': 'John'}, returning='id')
-        self.assertIn('returning', q.lower())
-        self.assertIn('"id"', q)
+    def test_insert_returning_non_supported_raises(self):
+        for unsupported_dbms in ('mysql', 'oracle'):
+            with self.subTest(dbms=unsupported_dbms):
+                ds = sql.Datasource(source='users', dbms=unsupported_dbms)
+                with self.assertRaises(sql.ValidationError):
+                    ds.insert(values={'name': 'Alice'}, returning='id')
 
-    def test_insert_returning_non_pg_raises(self):
-        ds = sql.Datasource(source='users', dbms='sqlite')
-        with self.assertRaises(ValidationError):
-            ds.insert(values={'first_name': 'John'}, returning='id')
+    def test_insert_returning_supported_dialects(self):
+        for supported_dbms in ('pg', 'sqlite', 'duckdb'):
+            with self.subTest(dbms=supported_dbms):
+                ds = sql.Datasource(source='users', dbms=supported_dbms)
+                query, values = ds.insert(values={'name': 'Alice'}, returning='id')
+                self.assertTrue(query.strip().endswith('returning "id"'))
+                self.assertEqual(values, ['Alice'])
 
     def test_insert_empty_values_raises(self):
         ds = make_ds()
