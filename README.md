@@ -331,13 +331,13 @@ Substitution skips text inside quotes, so a value like `what?` does not collide 
 
 ## Examples
 
-- [`examples/datatables/`](https://github.com/fthiella/filtersql/tree/main/examples/datatables) — Flask, DataTables server-side, per-column filters and a global search
-- [`examples/pagination/`](https://github.com/fthiella/filtersql/tree/main/examples/pagination) — keyset pagination, with a separate allowlist for insert, update and delete
-- [`examples/ai/`](https://github.com/fthiella/filtersql/tree/main/examples/ai) — model output → filtersql → SQLite
-- [`examples/langchain/`](https://github.com/fthiella/filtersql/tree/main/examples/langchain) — a LangChain agent whose only tool takes filters; the policy's rejections go back to the model
-- [`examples/pandas_duckdb/`](https://github.com/fthiella/filtersql/tree/main/examples/pandas_duckdb) — DataFrames through DuckDB
+- [`examples/datatables/`](https://github.com/fthiella/filtersql/tree/master/examples/datatables) — Flask, DataTables server-side, per-column filters and a global search
+- [`examples/pagination/`](https://github.com/fthiella/filtersql/tree/master/examples/pagination) — keyset pagination, with a separate allowlist for insert, update and delete
+- [`examples/ai/`](https://github.com/fthiella/filtersql/tree/master/examples/ai) — model output → filtersql → SQLite
+- [`examples/langchain/`](https://github.com/fthiella/filtersql/tree/master/examples/langchain) — a LangChain agent whose only tool takes filters; the policy's rejections go back to the model
+- [`examples/pandas_duckdb/`](https://github.com/fthiella/filtersql/tree/master/examples/pandas_duckdb) — DataFrames through DuckDB
 
-The payload, independent of Python, is specified in [SPECS.md](https://github.com/fthiella/filtersql/blob/main/SPECS.md). Release history is in [CHANGELOG.md](https://github.com/fthiella/filtersql/blob/main/CHANGELOG.md).
+The payload, independent of Python, is specified in [SPECS.md](https://github.com/fthiella/filtersql/blob/master/SPECS.md). Release history is in [CHANGELOG.md](https://github.com/fthiella/filtersql/blob/master/CHANGELOG.md).
 
 ## License
 
