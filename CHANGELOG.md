@@ -11,12 +11,15 @@ All notable changes to this project will be documented in this file.
   (the default since PostgreSQL 9.1), but on a server with it off a key
   such as `x\' or 1=1 --` closes the literal and the rest is read as SQL.
   Doubling the backslash instead would silently change the key on the
-  default setting, so a key (or `fts_language`) containing a backslash is
-  now rejected with `InvalidIdentifierError` (`ConfigurationError` for
-  `fts_language`) on every dialect where backslash is not a defined
-  escape character. MySQL is unchanged: it already doubled backslashes.
-  Exact JSONB paths listed in `allowed_columns` are unaffected, since the
-  client cannot invent a key outside the list.
+  default setting, so a key containing a backslash is now rejected with
+  `InvalidIdentifierError` on every dialect where backslash is not a
+  defined escape character. The rejection applies to `allowed_columns`
+  entries too: the allowlist constrains what a client can name, not
+  whether a key can be rendered safely on the target server. A listed
+  path with a backslash is still rejected. `fts_language` follows the
+  same rule, but the check runs at construction time
+  (`ConfigurationError`) rather than at use. MySQL is unchanged: it
+  already doubled backslashes, so no rejection applies there.
 - **`%` is doubled for pyformat drivers.** With a `%s` placeholder
   (psycopg2/3, PyMySQL, mysql-connector, and any custom placeholder that
   contains `%`) the driver reads every `%` in the SQL text as a format
