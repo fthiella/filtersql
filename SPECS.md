@@ -1,6 +1,6 @@
-# filtersql JSON Payload Specification (v1.3.1)
+# filtersql JSON Payload Specification (v1.3.2)
 
-**Version**: 1.3.1
+**Version**: 1.3.2
 
 This document defines the formal, language-agnostic JSON payload specification for **filtersql**. Any implementation of this protocol (whether written in Python, Node.js, Go, Rust, or any other language) must accept and validate payloads conforming to this standard.
 
@@ -16,7 +16,7 @@ Every request payload must be a JSON object containing the top-level keys `actio
 +-------------------------------------------------------------+
 | JSON Payload                                                |
 |   ├── action ("select" | "insert" | "update" | "delete")    |
-|   ├── source (string: table, view, or raw subquery)         |
+|   ├── source (string: table or view identifier)             |
 |   ├── columns (array of strings or structured objects)      |
 |   ├── filters (array of standard or logically nested dicts) |
 |   ├── group_by (array of strings)                           |
@@ -36,7 +36,7 @@ Every request payload must be a JSON object containing the top-level keys `actio
 | Field | Type | Required | Description |
 | :--- | :--- | :--- | :--- |
 | `action` | `string` | **Yes** | The CRUD intent. Allowed values: `"select"`, `"insert"`, `"update"`, `"delete"`. Must be a string. |
-| `source` | `string` | **Yes** | The destination identifier (e.g., table name, database view, or subquery expression). Non-empty. |
+| `source` | `string` | **Yes** | Table or view identifier. Non-empty. A raw subquery is not a payload feature: the server opts into it separately. |
 | `columns` | `array` | No | Defines the projection properties. Used exclusively by `"select"`. |
 | `filters` | `array` | No | A flat or nested set of conditions mapping directly to a SQL `WHERE` clause. |
 | `group_by` | `array of strings` | No | List of columns for `GROUP BY` |
@@ -79,7 +79,7 @@ The `columns` property defines the subset of attributes to retrieve. It is an ar
 The `filters` array serves as the collection point for constraints. By default, items placed at the root level of the `filters` array are evaluated using implicit `AND` logic.
 
 #### Atomic Filter Object Properties:
-* `field` (`string`, **Required**): The targeted column name, JSONB keypath (`attributes->>amount`), or schema-prefixed name (`m.author`).
+* `field` (`string`, **Required**): The targeted column name, JSONB keypath (`attributes->>amount`), or schema-prefixed name (`m.author`). A JSONB key is spliced into the SQL as a quoted literal: single quotes are doubled, and a key containing a backslash or a NUL byte is rejected (`InvalidIdentifierError`) on Postgres.
 * `operator` (`string`, **Required**): The evaluation token. There is no default — every filter must explicitly specify an operator.
 * `value` (Any, Context-Dependent): The target criteria. Omitted for `null`/`notnull` operators. Must be an array for `in`, `notin`, and `between`.
 * `value_type` (`string`, Optional): Instructs explicit datatype casting on evaluation. Honored only on Postgres JSONB paths (`col->>key`). Ignored elsewhere.
@@ -100,7 +100,7 @@ The `filters` array serves as the collection point for constraints. By default, 
 | `iends_with`, `not_iends_with` | Suffix match / exclusion (Case-Insensitive) | `string` | String suffix matching |
 | `null`, `notnull` | Emptiness evaluations | Omitted | `IS NULL` / `IS NOT NULL` |
 | `regexp`, `not_regexp` | Regular expression / exclusion (Case-Sensitive) | `string` | Native Regex tokens (`~`, `!~`, `regexp_like`) |
-| `iregexp`, `not_iregexp` | Regular expression / exclusion (Case-Insensitive) | `string` | Native Regex tokens (`~*`, `!~*`, etc.) |
+| `iregexp`, `not_iregexp` | Regular expression / exclusion (Case-Insensitive) | `string` | Native Regex tokens (`~*`, `!~*`, `regexp_like(..., 'i')`). On SQLite, `REGEXP` has no case-insensitive mode and `iregexp` is an alias of `regexp`. |
 | `fts`, `fts_query` | Full-Text Search processing | `string` | `@@ websearch_to_tsquery` or `MATCH AGAINST` |
 
 **Pattern operators and bound values.** For `contains`, `starts_with`, `ends_with` and their `i*` / `not_*` variants, the wildcard markers are part of the bound value, not the SQL text. A payload `{"operator": "icontains", "value": "foo"}` produces a bound value of `"%foo%"` (with literal `%` / `_` in `foo` escaped). An implementation is free to generate the pattern differently in the SQL, but the value passed to the driver should follow this convention so that callers can reliably read, log, or replay the `values` list.
@@ -224,6 +224,8 @@ silently return zero rows on `next`/`prev`/`seek`.
 
 `having` uses the exact same filter format as `filters`. A `field` is quoted as an identifier by default. An aggregate expression like `COUNT(*)` is not an identifier, so mark it `"raw": true` and repeat the expression itself, rather than referencing the column's `alias`.
 
+`scope` is applied by the operations that build a full statement (`select`, `where`, `insert`, `update`, `delete`). A `having` fragment built on its own does not include it; the caller adds the scope predicate, or builds the whole statement with `select`.
+
 **Why not reference the alias?** PostgreSQL, Oracle, and SQL Server only expose SELECT-list aliases to `ORDER BY`/`GROUP BY`, not to `HAVING`. MySQL and SQLite are more permissive, but relying on that is non-portable. Repeating the expression works everywhere.
 
 **Note on `raw`:** `raw: true` requires the server to opt in via a `Datasource(allow_raw_fields=True)` (or the equivalent in another implementation). A payload alone cannot enable raw mode — this is a security boundary, not an oversight. If raw is not enabled, the query build fails with a `ConfigurationError`.
@@ -267,8 +269,8 @@ The following parameters are **not** part of the payload. They are set by the ap
 | :--- | :--- |
 | `dbms` | SQL dialect. Canonical values (lowercase): `'pg'`, `'sqlite'`, `'mysql'`, `'duckdb'`, `'oracle'`. Input is case-insensitive; `'PG'` resolves to `'pg'`. Unrecognized names (e.g. `'postgres'`) raise `ConfigurationError`. **Required** by `filtersql()`. |
 | `placeholder` | Parameter marker used in generated SQL. Defaults per dialect (see below). |
-| `scope` | Dict of `field: value` conditions applied to every operation. Used for multi-tenant filtering. Server-side only. |
-| `fts_language` | Language name passed to `websearch_to_tsquery` (PostgreSQL only, default: `'english'`). |
+| `scope` | Dict of `field: value` conditions applied as `AND` predicates by `select`, `where`, `insert`, `update` and `delete`. Not included in a standalone `having` fragment. Server-side only. |
+| `fts_language` | Language name spliced into `websearch_to_tsquery` (PostgreSQL only, default: `'english'`). A value containing a backslash is rejected. |
 | `allow_raw_fields` | If `false`, payloads containing `raw: true` raise `ConfigurationError`. |
 | `allow_raw_source` / `raw_source` | Enable a raw subquery as `source`. Must be explicitly opted in. |
 | `allowed_columns` | Exact-match allowlist of every column a client may reference (`columns`, `filters`, `having`, `order`, `group_by`, `cursor`, `returning`, keys of `values` and `id`). No normalization. While set, `SELECT *` and `raw` are refused. Scope columns need not be listed. `None` = unrestricted; an empty collection allows nothing. |
@@ -286,7 +288,9 @@ The following parameters are **not** part of the payload. They are set by the ap
 
 `oracle` uses numbered binds so a single statement can bind values in order. A custom `placeholder` may contain `{n}` at most once (e.g. `'${n}'` produces `$1`, `$2`, …). A placeholder without `{n}` is used verbatim for every value (`'$'` produces `$`, `$`, …).
 
-The `filtersql()` convenience function rejects any payload or `**kwargs` that contains one of these keys, to prevent a client from escalating its own privileges. They must be supplied as **named parameters** to `filtersql()` (which forwards them to `Datasource`).
+When the placeholder contains `%` (the default on PostgreSQL and MySQL), every `%` the implementation splices into the SQL text — identifiers, JSONB keys, the FTS language — is written doubled (`%%`), because those drivers treat `%` as a format character. Bound values are not doubled; the driver does that. This is a driver concern, not a change to the payload.
+
+The reference `filtersql()` function rejects any of these keys when they appear **inside the payload object**. It cannot tell a named argument from a splat: `filtersql(**payload)` binds `scope`, `allow_raw_fields`, `allowed_columns` and the rest as real parameters and does not raise. Callers pass the payload as one object and the server configuration as named arguments: `filtersql(payload, dbms=..., scope=..., allowed_columns=...)`. Never unpack the client JSON into the call.
 
 ---
 

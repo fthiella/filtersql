@@ -329,6 +329,16 @@ class Datasource:
         ):
             raise ConfigurationError("placeholder may contain '{n}' at most once and no other braces.")
         self._numbered = '{n}' in self.placeholder
+        # pyformat drivers (psycopg2/3, PyMySQL, mysql-connector) treat '%' in
+        # the SQL text as a format character, so every '%' we splice into the
+        # text ourselves (identifiers, JSONB keys) must be doubled.
+        self._pyformat = '%' in self.placeholder
+
+        if ('\\' in self.fts_language
+                and not DBMS_MAP[self.dbms].get('literal_backslash_escapes')):
+            raise ConfigurationError(
+                "fts_language cannot contain a backslash on this dialect."
+            )
         if self._numbered:
             self._bind_prefix, self._bind_suffix = self.placeholder.split('{n}')
 
@@ -674,10 +684,14 @@ class Datasource:
                 return "null"
             return str(val)
 
-        out = [parts[0]]
+        def _text(s):
+            # '%%' is the pyformat spelling of a literal '%' in SQL text.
+            return s.replace('%%', '%') if self._pyformat else s
+
+        out = [_text(parts[0])]
         for val, tail in zip(values, parts[1:]):
             out.append(_format(val))
-            out.append(tail)
+            out.append(_text(tail))
         return ''.join(out)
 
     def _split_binds(self, query: str) -> list | None:
@@ -780,7 +794,7 @@ class Datasource:
                 f"Invalid direction '{active_direction}'. Please use: seek, next, prev."
             )
 
-        if cursor:
+        if cursor is not None:
             if not active_direction:
                 raise ValidationError(
                     "A 'direction' ('seek', 'next', 'prev') must be provided "
@@ -975,6 +989,15 @@ class Datasource:
             raise ValidationError(f"Filter is missing required 'operator' key: {f}")
         if not field:
             raise ValidationError(f"Filter is missing required 'field' key: {f}")
+
+        if operator in ('fts', 'fts_query') and self.dbms not in ('pg', 'mysql'):
+            raise ValidationError(f"FTS operator not supported for {self.dbms}")
+
+        if operator not in DBMS_MAP[self.dbms]["search_map"]:
+            valid = list(DBMS_MAP[self.dbms]['search_map'].keys())
+            raise ValidationError(
+                f"Operator '{operator}' not valid for {self.dbms}. Valid: {valid}"
+            )
 
         kind, values = self._normalize_filter_value(operator, f.get('value'))
 
@@ -1256,6 +1279,10 @@ class Datasource:
         literal, leaving the rest of the query concatenated into the
         string (a syntax error at best, a smuggling vector at worst).
 
+        When the placeholder is a pyformat marker ('%s'), every '%' is
+        doubled as well, so a literal such as 'a%s' is not mistaken by the
+        driver for a bind slot.
+
         Deliberately does NOT trim whitespace or strip quote characters -
         either could be meaningful, real content (e.g. a JSONB key that
         legitimately has a trailing space, common in data imported from
@@ -1269,11 +1296,35 @@ class Datasource:
             raise ValidationError("SQL literal contains null byte.")
         if DBMS_MAP[self.dbms].get('literal_backslash_escapes'):
             value = value.replace('\\', '\\\\')
-        return value.replace("'", "''")
+        value = value.replace("'", "''")
+        if self._pyformat:
+            value = value.replace('%', '%%')
+        return value
+
+    def _safe_user_literal(self, raw_value: str) -> str:
+        """
+        Like _safe_sql_literal, for text that a client can influence (JSONB
+        keys), where a backslash must never reach the SQL text unescaped.
+
+        Whether a backslash is an escape character inside '...' depends on a
+        server setting we cannot see: always on in MySQL, but on Postgres it
+        depends on standard_conforming_strings (on by default since 9.1, off
+        on legacy setups). Doubling it would change the key on the default
+        setting, and leaving it alone lets a key such as  x\\' or 1=1 --
+        escape the literal on the legacy one. So where the dialect does not
+        define backslash as an escape character, a key containing one is
+        rejected instead of guessed at.
+        """
+        value = str(raw_value)
+        if '\\' in value and not DBMS_MAP[self.dbms].get('literal_backslash_escapes'):
+            raise InvalidIdentifierError(
+                f"JSONB key {value!r} contains a backslash, which is not supported."
+            )
+        return self._safe_sql_literal(value)
 
     # Kept as an alias: _safe_jsonb_key was the original, narrower name for
     # this helper before it was generalized to cover fts_language too.
-    _safe_jsonb_key = _safe_sql_literal
+    _safe_jsonb_key = _safe_user_literal
 
     @staticmethod
     def _validate_bare_identifier(name: str) -> str:
@@ -1503,7 +1554,7 @@ class Datasource:
         if path:
             quoted_base = self._quote(base, quote)
             safe_path = "".join(
-                f"{op}'{self._safe_jsonb_key(key)}'" for op, key in path
+                f"{op}'{self._safe_user_literal(key)}'" for op, key in path
             )
             return f"{quoted_base}{safe_path}"
 
@@ -1514,6 +1565,8 @@ class Datasource:
             return ".".join(self._quote(p, quote) for p in parts)
 
         escaped_name = name.replace(quote, quote * 2)
+        if self._pyformat:
+            escaped_name = escaped_name.replace('%', '%%')
         return f"{quote}{escaped_name}{quote}"
 
     def _invert_order(self, ord: str, inv: str | bool) -> str:
@@ -1637,6 +1690,15 @@ def filtersql(payload=None, dbms=None, scope=None, raw_source=False,
               allow_raw_source=False, allow_raw_fields=False,
               allowed_columns=None, allowed_sources=None,
               placeholder=None, fts_language=None, **kwargs) -> tuple[str, list]:
+    """
+    Build a query from a payload dict.
+
+    Server configuration (dbms, scope, allowlists, raw flags, placeholder,
+    fts_language) must be passed as named arguments. The same keys are
+    rejected when they appear inside `payload`. They are not rejected when
+    the client dict is unpacked (`filtersql(**payload)` binds them as named
+    arguments). Pass the payload as one object.
+    """
     if payload is not None and not isinstance(payload, dict):
         raise ValidationError(f"Expected dict for 'payload', got {type(payload).__name__}")
 

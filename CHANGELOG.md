@@ -2,6 +2,79 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.2] - 2026-10-30
+
+### Fixed
+- **JSONB keys: backslash rejected on Postgres.** A JSONB key is spliced
+  into the SQL text as a quoted literal (`"data"->>'key'`), not bound.
+  Doubling the quote is enough when `standard_conforming_strings` is on
+  (the default since PostgreSQL 9.1), but on a server with it off a key
+  such as `x\' or 1=1 --` closes the literal and the rest is read as SQL.
+  Doubling the backslash instead would silently change the key on the
+  default setting, so a key (or `fts_language`) containing a backslash is
+  now rejected with `InvalidIdentifierError` (`ConfigurationError` for
+  `fts_language`) on every dialect where backslash is not a defined
+  escape character. MySQL is unchanged: it already doubled backslashes.
+  Exact JSONB paths listed in `allowed_columns` are unaffected, since the
+  client cannot invent a key outside the list.
+- **`%` is doubled for pyformat drivers.** With a `%s` placeholder
+  (psycopg2/3, PyMySQL, mysql-connector, and any custom placeholder that
+  contains `%`) the driver reads every `%` in the SQL text as a format
+  character. A column, alias, source or JSONB key containing `%` (for
+  example `meta->>%s`, or a column named `a%b`) made the driver count an
+  extra bind slot and fail with an error, turning one payload into a
+  request-level failure. `%` is now emitted as `%%` in quoted
+  identifiers and spliced literals when the placeholder contains `%`;
+  `?`, `:{n}` and other placeholders are untouched. `debug()` shows the
+  text with `%` restored. `raw` expressions and `raw_source` are the
+  caller's SQL and are not rewritten: with a pyformat driver they must
+  use `%%` for a literal percent sign.
+- **Unknown operators get an accurate error.** An operator that does not
+  exist for the dialect (`not_in`, `In`) was reported as "expects a
+  single scalar value" whenever its value was a list or a dict, because
+  the value was validated before the operator. The operator is now
+  checked first and the error names the real problem:
+  `Operator 'not_in' not valid for sqlite. Valid: [...]`. Operator names
+  remain exact and case-sensitive. The FTS-on-an-unsupported-dialect
+  check moved with it, so `fts` / `fts_query` fail with the same message
+  as before.
+- **`having()` validates its input.** Called directly, it raises
+  `ValidationError` for a `filters` that is not a list, as `where()`
+  does, and returns `("", [])` for `None` or an empty list.
+
+### Documentation
+- README rewritten around the server-side policy (section **The rule**):
+  what filtersql guarantees, what it leaves to the caller
+  (authorization, resource limits, raw SQL), and a deployment
+  checklist. It also warns against `filtersql(**request.json)`, which
+  turns the payload keys into named arguments and bypasses the
+  server-side flag check.
+- New example, `examples/langchain/`: a LangChain agent whose single tool
+  takes filters (never SQL), with the allowlist and scope enforced
+  server-side and rejections returned to the model as text.
+- README and SPECS: `having()` on its own does not add `scope`
+  (`select()` and `where()` do); `where()` numbers from `:1` on
+  numbered placeholders; a custom placeholder without `{n}` is repeated
+  as-is (`'$'` gives `$`, not `$1`; use `'${n}'`).
+
+### Tests
+- New coverage for backslash and NUL in JSONB keys and `fts_language`
+  (Postgres, MySQL, SQLite), and for `%` in column names, aliases,
+  sources and JSONB keys under `%s`, `?`, `:{n}` and custom placeholders,
+  including a render through Python `%` formatting to mimic a pyformat
+  driver.
+- New coverage for the operator message: unknown operator with a scalar,
+  list, dict and `None` value, in `where()` and `having()`.
+
+### Notes
+- Upgrade checklist:
+  - If you use Postgres JSONB paths and a key contains a backslash,
+    it is now rejected; list the path in `allowed_columns` if it is a
+    fixed one, or rename the key.
+  - If you use a `%s` driver and build `raw` expressions that contain a
+    literal `%`, write it as `%%`.
+- No other behaviour changes for well-formed payloads.
+
 ## [1.3.1] - 2026-10-24
 
 ### Added

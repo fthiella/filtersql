@@ -42,8 +42,7 @@ if not os.environ.get("GEMINI_API_KEY"):
     )
 
 client = genai.Client(api_key=os.environ["GEMINI_API_KEY"])
-MODEL = "gemini-3.1-flash-lite"
-
+MODEL = os.environ.get("MODEL", "gemini-3.1-flash-lite")
 
 # ============================================================================
 # SERVER-SIDE POLICY
@@ -55,9 +54,12 @@ MODEL = "gemini-3.1-flash-lite"
 #
 #   password_hash -> a secret; readable only by an authenticated admin flow
 #                    that this demo does not implement
-#   tenant_id     -> scope-only; the tenant boundary is injected server-side
-#                    and a client must not be able to name it, because naming
-#                    it would let the client probe other tenants' data
+#   tenant_id     -> scope-only. The boundary is injected server-side and
+#                    ANDed outside the model's filters, so tenant_id = 99
+#                    cannot read that tenant: it becomes
+#                    tenant_id = 42 AND tenant_id = 99, and the page comes
+#                    back empty. The allowlist turns that silence into an
+#                    error. The column also cannot be set on a write.
 #
 # The model will *try* both (see the questions below). filtersql rejects them.
 
@@ -118,8 +120,8 @@ SCHEMA = {
         "exclude": {
             "type": "ARRAY",
             "description": (
-                "Filters to NEGATE: the result must not match any of these. "
-                "Example: 'users who are not admins' -> "
+                "Conditions negated together as NOT (a AND b AND ...). "
+                "One item is enough for 'users who are not admins': "
                 "[{field: 'role', operator: '=', value: 'admin'}]"
             ),
             "items": {
