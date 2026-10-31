@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [1.3.2] - 2026-10-30
+## [1.3.2] - 2026-10-31
 
 ### Fixed
 - **JSONB keys: backslash rejected on Postgres.** A JSONB key is spliced
