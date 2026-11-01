@@ -6,47 +6,51 @@ import re
 
 # parse Datatable Args
 
-def __int_str(v):
-    if v.isdigit():
-        return(int(v))
+_DT_SCALARS = ('draw', 'start', 'length', '_')
+_DT_KEY_RE = re.compile(
+    r'^(\w+)(?:\[(\w+)\])(?:\[(\w+)\])?(?:\[(\w+)\])?$'
+)
+
+
+def _int_str(v):
+    # ASCII digits only: str.isdigit() is also true for '²' or '٣', which
+    # int() then rejects with ValueError.
+    if v.isascii() and v.isdigit():
+        return int(v)
     return v
 
+
 def parseDatatableArgs(args):
+    """
+    Turn DataTables' flat query args (``columns[0][search][value]=x``) into
+    nested dicts (``{'columns': {0: {'search': {'value': 'x'}}}}``).
+
+    `args` comes straight from the client, so this function never raises on
+    odd input: keys that do not match the bracket syntax, or that conflict
+    with an earlier key (``a[0][b]=1`` followed by ``a[0][b][c]=2``), are
+    skipped and the first value wins.
+    """
     p = {}
     for a in args:
-        if a in ['draw', 'start', 'length', '_']:
+        if a in _DT_SCALARS:
             p[a] = args.get(a)
+            continue
+
+        m = _DT_KEY_RE.match(a)
+        if not m:
+            continue
+
+        path = [_int_str(g) for g in m.groups() if g is not None]
+        node = p
+        for k in path[:-1]:
+            child = node.get(k)
+            if child is None:
+                child = node[k] = {}
+            if not isinstance(child, dict):
+                break  # an earlier key made this a leaf: conflict, skip
+            node = child
         else:
-            m = re.match(
-                r'^(\w+)(?:\[(\w+)\])(?:\[(\w+)\])?(?:\[(\w+)\])?$',
-                a
-            )
-            if m:
-                g = m.groups()
-
-                if __int_str(g[0]) not in p:
-                    p[__int_str(g[0])] = {}
-
-                if g[1] is None:
-                    p[__int_str(g[0])] = args.get(a)
-                    continue
-
-                if g[1] is not None and __int_str(g[1]) not in p[__int_str(g[0])]:
-                    p[__int_str(g[0])][__int_str(g[1])] = {}
-
-                if g[2] is None:
-                    p[__int_str(g[0])][__int_str(g[1])] = args.get(a)
-                    continue
-
-                if g[2] is not None and __int_str(g[2]) not in p[__int_str(g[0])][__int_str(g[1])]:
-                    p[__int_str(g[0])][__int_str(g[1])][__int_str(g[2])] = {}
-
-                if g[3] is None:
-                    p[__int_str(g[0])][__int_str(g[1])][__int_str(g[2])] = args.get(a)
-                    continue
-
-                p[__int_str(g[0])][__int_str(g[1])][__int_str(g[2])][__int_str(g[3])] = args.get(a)
-            else:
-                print("{} not matched".format(a))
+            if not isinstance(node.get(path[-1]), dict):
+                node[path[-1]] = args.get(a)
 
     return p

@@ -7,6 +7,7 @@ and server-side tenant scoping.
 """
 
 from flask import Flask, request, jsonify, render_template
+import os
 import sqlite3
 from filtersql import filtersql
 from filtersql.utils import parseDatatableArgs
@@ -154,4 +155,5 @@ def api_users():
         conn.close()
 
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    # Flask's debugger allows code execution: enable it only on purpose.
+    app.run(debug=os.getenv('FILTERSQL_EXAMPLE_DEBUG', '').lower() in ('1', 'true', 'yes', 'on'), port=5000)

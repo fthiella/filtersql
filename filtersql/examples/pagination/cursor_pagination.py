@@ -6,6 +6,7 @@ Demonstrates cursor-based pagination and safe CRUD operations via a generic API 
 """
 
 from flask import Flask, request, jsonify, render_template
+import os
 import sqlite3
 from filtersql import filtersql, FilterSQLError
 
@@ -17,13 +18,27 @@ DB_FILE = 'demo.db'
 # ============================================================================
 
 ALLOWED_TABLES = {
-    'users': {'id', 'first_name', 'last_name', 'email', 'age', 'status', 'role', 'tenant_id'},
+    # tenant_id is deliberately NOT listed: it is scope-only. The server adds
+    # it with AND and a client can neither name it nor set it.
+    'users': {'id', 'first_name', 'last_name', 'email', 'age', 'status', 'role'},
 #    'contracts': {'id', 'tenant_id', 'contract_number', 'amount', 'status', 'created_at'},
 #    'resolutions': {'id', 'tenant_id', 'title', 'body', 'date'}
 }
 
 # Server-side multi-tenant boundary example (optional, can be adapted per session/auth)
 DEFAULT_TENANT_ID = 42
+
+# Writes address one row by primary key. Without this, {"id": {"status": "x"}}
+# would update or delete every row of the tenant that matches.
+PRIMARY_KEY = 'id'
+
+# The query and its parameters are only echoed to the client (and Flask's
+# debugger only starts) when FILTERSQL_EXAMPLE_DEBUG=1. Do not copy this to
+# production: it shows the client your SQL and your tenant id.
+DEBUG = os.getenv('FILTERSQL_EXAMPLE_DEBUG', '').lower() in ('1', 'true', 'yes', 'on')
+
+def _debug_info(query, params):
+    return {'debug_sql': query, 'debug_params': params} if DEBUG else {}
 
 def get_db_connection():
     conn = sqlite3.connect(DB_FILE)
@@ -44,6 +59,13 @@ def api_gateway(source, action):
     # 2. Payload Extraction
     payload = request.json or {}
     
+    # 2b. Writes must target exactly one row by primary key.
+    if action in ('update', 'delete'):
+        ident = payload.get('id')
+        if not isinstance(ident, dict) or set(ident) != {PRIMARY_KEY}:
+            return jsonify({'status': 'error',
+                            'message': f"'{action}' requires id = {{'{PRIMARY_KEY}': ...}}"}), 400
+
     # Restrict columns allowed for this table using filtersql 1.3.1 allowlists
     table_allowed_columns = ALLOWED_TABLES[source]
     
@@ -73,8 +95,7 @@ def api_gateway(source, action):
                 return jsonify({
                     'status': 'ok',
                     'data': records,
-                    'debug_sql': query,
-                    'debug_params': params
+                    **_debug_info(query, params)
                 })
                 
             else:
@@ -85,8 +106,7 @@ def api_gateway(source, action):
                     'status': 'ok',
                     'message': f'Operation {action.upper()} successfully completed on {source}.',
                     'rows_affected': rows_affected,
-                    'debug_sql': query,
-                    'debug_params': params
+                    **_debug_info(query, params)
                 })
                 
     except FilterSQLError as e:
@@ -105,4 +125,4 @@ def api_gateway(source, action):
 
 if __name__ == '__main__':
     # use_reloader=False prevents watchdog from crashing/reloading on third-party site-packages changes
-    app.run(debug=True, use_reloader=False, port=5000)
+    app.run(debug=DEBUG, use_reloader=False, port=5000)

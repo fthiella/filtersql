@@ -1,5 +1,10 @@
+filtersql
 flask
-google-genai
-python-dotenv
 pandas
 duckdb
+python-dotenv
+# ai/gemini_integration.py
+google-genai
+# langchain/langchain_agent.py
+langchain
+langchain-google-genai

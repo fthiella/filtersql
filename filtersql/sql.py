@@ -220,12 +220,16 @@ class FilterSQLError(Exception):
     """Base class for exceptions in this module."""
     pass
 
-class InvalidIdentifierError(FilterSQLError):
-    """Raised when a field name is invalid or potentially dangerous."""
-    pass
-
 class ValidationError(FilterSQLError):
     """Raised when user input is invalid (e.g., bad field name, bad types)."""
+    pass
+
+class InvalidIdentifierError(ValidationError):
+    """Raised when a field name is invalid or potentially dangerous.
+
+    Subclass of ValidationError: a bad identifier is bad client input, so
+    ``except ValidationError`` (-> HTTP 400) also covers it.
+    """
     pass
 
 class ConfigurationError(FilterSQLError):
@@ -763,6 +767,7 @@ class Datasource:
             if not isinstance(item, dict) or not item.get('field'):
                 raise ValidationError(f"Each item in 'order' must be a dict with a 'field' key: {item!r}")
             field = item['field']
+            self._require_identifier_str(field, "Order field")
             if field in seen:
                 raise ValidationError(
                     f"Duplicate field {field!r} in 'order'. "
@@ -1350,7 +1355,8 @@ class Datasource:
         NFD key for execution, hitting a different column on byte-exact
         dialects.
         """
-        if not isinstance(name, str) or not name:
+        Datasource._require_identifier_str(name, "Identifier")
+        if not name:
             raise InvalidIdentifierError("Identifier cannot be empty.")
 
         canonical = unicodedata.normalize('NFC', name)
@@ -1416,6 +1422,15 @@ class Datasource:
                 f"Source {self.source!r} is not in allowed_sources."
             )
 
+    @staticmethod
+    def _require_identifier_str(name, what: str = "Column name") -> None:
+        """Rejects non-string identifiers before they reach a set/dict lookup
+        (an unhashable list/dict would raise TypeError, not FilterSQLError)."""
+        if not isinstance(name, str):
+            raise InvalidIdentifierError(
+                f"{what} must be a string, got {type(name).__name__}."
+            )
+
     def _check_allowed_column(self, name: str) -> None:
         """
         Raises if `allowed_columns` is set and `name` is not in it.
@@ -1425,6 +1440,7 @@ class Datasource:
         not. Dialects that fold unquoted names still reject a spelling
         that was not listed.
         """
+        self._require_identifier_str(name)
         if self.allowed_columns is None:
             return
         if name not in self.allowed_columns:
@@ -1538,7 +1554,8 @@ class Datasource:
         stripped — same rule as _validate_bare_identifier. Whitespace
         around '.' and '->'/'->>' is treated as cosmetic and trimmed.
         """
-        if not isinstance(name, str) or not name:
+        self._require_identifier_str(name, "Identifier")
+        if not name:
             raise InvalidIdentifierError("Identifier cannot be empty.")
         if name != name.strip():
             raise InvalidIdentifierError(
@@ -1686,7 +1703,16 @@ class Datasource:
         limit_template = DBMS_MAP[kwargs["dbms"]].get("limit", "")
         return limit_template.format(start=start, length=length)
 
-def filtersql(payload=None, dbms=None, scope=None, raw_source=False,
+# Payload fields that may also be passed as keyword arguments
+# (``filtersql(payload, cursor=..., direction=...)``). Anything else in
+# **kwargs is an error: a misspelled policy argument must never be absorbed
+# into the payload and ignored.
+_PAYLOAD_KWARGS = frozenset({
+    'action', 'source', 'columns', 'filters', 'group_by', 'having',
+    'order', 'limit', 'direction', 'cursor', 'values', 'id', 'returning',
+})
+
+def filtersql(payload=None, *, dbms=None, scope=None, raw_source=False,
               allow_raw_source=False, allow_raw_fields=False,
               allowed_columns=None, allowed_sources=None,
               placeholder=None, fts_language=None, **kwargs) -> tuple[str, list]:
@@ -1694,11 +1720,27 @@ def filtersql(payload=None, dbms=None, scope=None, raw_source=False,
     Build a query from a payload dict.
 
     Server configuration (dbms, scope, allowlists, raw flags, placeholder,
-    fts_language) must be passed as named arguments. The same keys are
-    rejected when they appear inside `payload`. They are not rejected when
-    the client dict is unpacked (`filtersql(**payload)` binds them as named
-    arguments). Pass the payload as one object.
+    fts_language) is keyword-only. Extra keyword arguments are accepted only
+    when they are payload fields (action, source, columns, filters,
+    group_by, having, order, limit, direction, cursor, values, id,
+    returning) and override the same key in `payload`. Any other name, such
+    as a misspelled ``allowed_column=``, raises TypeError instead of being
+    silently ignored (which would run the query without the allowlist).
+
+    The policy keys are also rejected when they appear inside `payload`.
+    They are not rejected when the client dict is unpacked
+    (`filtersql(**payload)` binds ``scope`` or ``allowed_columns`` as real
+    named arguments), so pass the payload as one object.
     """
+    unknown = sorted(set(kwargs) - _PAYLOAD_KWARGS)
+    if unknown:
+        raise TypeError(
+            f"filtersql() got unexpected keyword argument(s): {unknown}. "
+            f"Server configuration names: dbms, scope, raw_source, "
+            f"allow_raw_source, allow_raw_fields, allowed_columns, "
+            f"allowed_sources, placeholder, fts_language."
+        )
+
     if payload is not None and not isinstance(payload, dict):
         raise ValidationError(f"Expected dict for 'payload', got {type(payload).__name__}")
 

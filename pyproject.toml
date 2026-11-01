@@ -36,3 +36,7 @@ Issues = "https://github.com/fthiella/filtersql/issues"
 [tool.setuptools.dynamic]
 version = {attr = "filtersql.__version__"}
 readme = {file = ["README.md"], content-type = "text/markdown"}
+
+[tool.setuptools.packages.find]
+include = ["filtersql"]
+exclude = ["filtersql.tests*", "filtersql.examples*"]

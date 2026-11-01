@@ -217,7 +217,7 @@ def question_to_sql(question: str, ds: filtersql.Datasource):
             filters = payload.get("filters"),
             order   = payload.get("order"),
         )
-    except (filtersql.ValidationError, filtersql.ConfigurationError) as e:
+    except filtersql.ValidationError as e:  # includes InvalidIdentifierError
         print(f"\n[filtersql rejected the AI payload] {e}")
         return None, None
 

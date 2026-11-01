@@ -2,6 +2,35 @@
 
 All notable changes to this project will be documented in this file.
 
+## [1.3.3] - 2026-11-01
+
+### Behavior changes
+- Policy arguments of `filtersql()` are keyword-only and unknown keyword
+  arguments raise `TypeError`. This is a deliberate fix for a fail-open
+  bug, released as a patch because 1.3.2 was published a day earlier.
+  Pass `dbms` and the other server settings by name.
+
+### Fixed
+- **`filtersql()` no longer ignores a misspelled policy argument.** Extra
+  keyword arguments were merged into the payload and dropped, so
+  `filtersql(payload, dbms="pg", allowed_column={...})` or `scopes=` ran
+  the query with no allowlist / no scope. `**kwargs` now accepts only
+  payload fields (`cursor`, `direction`, `filters`, ...); any other name
+  raises `TypeError`. The policy arguments (`dbms`, `scope`, `allowed_*`,
+  `raw_*`, `placeholder`, `fts_language`) are keyword-only, so `dbms` can
+  no longer be passed positionally.
+- **Non-string identifiers raise `InvalidIdentifierError`, not `TypeError`.**
+  `order=[{"field": ["a"]}]` and, with `allowed_columns` set,
+  `group_by=[{...}]` failed on an unhashable lookup. The message for a
+  non-string identifier no longer says "cannot be empty".
+- **`InvalidIdentifierError` now derives from `ValidationError`**, so
+  `except ValidationError` (HTTP 400) covers bad identifiers too.
+- **`parseDatatableArgs` no longer raises on client input.** `columns[²][data]`
+  (`str.isdigit()` is true for `²`, `int()` fails) and conflicting keys such
+  as `a[0][b]` + `a[0][b][c]` raised `ValueError`/`TypeError`. Conflicts are
+  skipped (first value wins), unmatched keys are skipped without the stray
+  `print()`.
+
 ## [1.3.2] - 2026-10-31
 
 ### Fixed
