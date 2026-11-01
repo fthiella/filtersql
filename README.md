@@ -81,9 +81,41 @@ query, values = filtersql.filtersql(
 cursor.execute(query, values)
 ```
 
-A value cannot break out of a placeholder. A model can still name a table or a column you did not mean to expose, or pick `delete`. The three named arguments above are how you stop that. They cannot be set from the payload.
+A value cannot break out of a placeholder. A model can still name a table or a column you did not mean to expose. `allowed_sources`, `allowed_columns` and `scope` are how you stop that, and they cannot be set from the payload.
+
+They do not restrict the *action*: a payload with `"action": "delete"` or `"update"` is accepted if its source, columns and scope pass. For a read-only tool, refuse anything that is not a `select` before you call filtersql (the example below does).
 
 That is the whole product: the client describes the query, your code decides what is allowed.
+
+### See it in 30 seconds
+
+No API key and no server: [`llm_guardrails.py`](https://github.com/fthiella/filtersql/blob/master/filtersql/examples/quickstart/llm_guardrails.py) uses a stub in place of the model and an in-memory SQLite database with two tenants and a `password_hash` column.
+
+```python
+POLICY = dict(
+    dbms="sqlite",
+    allowed_sources={"users"},
+    allowed_columns={"id", "first_name", "status"},   # no password_hash
+    scope={"tenant_id": 42},                          # always ANDed
+)
+```
+
+```text
+> active users
+  select "id", "first_name" from "users" where ("tenant_id" = ? and "status" = ?) [42, 'active']
+  -> [(1, 'Ada'), (3, 'Grace')]
+
+> everyone's passwords
+  refused: Column 'password_hash' is not in allowed_columns.
+
+> users of tenant 7
+  refused: Column 'tenant_id' is not in allowed_columns.
+
+> drop the inactive ones
+  refused: this tool only reads
+```
+
+The model's requests are ordinary JSON. The first one runs, with the tenant condition added by your code. The others never reach the database.
 
 ## The rule
 
@@ -333,6 +365,7 @@ Substitution skips text inside quotes, so a value like `what?` does not collide 
 
 - [`examples/datatables/`](https://github.com/fthiella/filtersql/tree/master/filtersql/examples/datatables) — Flask, DataTables server-side, per-column filters and a global search
 - [`examples/pagination/`](https://github.com/fthiella/filtersql/tree/master/filtersql/examples/pagination) — keyset pagination, with a separate allowlist for insert, update and delete
+- [`examples/quickstart/`](https://github.com/fthiella/filtersql/tree/master/filtersql/examples/quickstart) — no API key: a stubbed model, an allowlist, a tenant scope, and four requests
 - [`examples/ai/`](https://github.com/fthiella/filtersql/tree/master/filtersql/examples/ai) — model output → filtersql → SQLite
 - [`examples/langchain/`](https://github.com/fthiella/filtersql/tree/master/filtersql/examples/langchain) — a LangChain agent whose only tool takes filters; the policy's rejections go back to the model
 - [`examples/pandas_duckdb/`](https://github.com/fthiella/filtersql/tree/master/filtersql/examples/pandas_duckdb) — DataFrames through DuckDB
