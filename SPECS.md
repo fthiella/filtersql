@@ -1,6 +1,6 @@
-# filtersql JSON Payload Specification (v1.3.2)
+# filtersql JSON Payload Specification (v1.3.3)
 
-**Version**: 1.3.2
+**Version**: 1.3.3
 
 This document defines the formal, language-agnostic JSON payload specification for **filtersql**. Any implementation of this protocol (whether written in Python, Node.js, Go, Rust, or any other language) must accept and validate payloads conforming to this standard.
 
