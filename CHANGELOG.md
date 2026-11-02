@@ -2,7 +2,7 @@
 
 All notable changes to this project will be documented in this file.
 
-## [1.3.3] - 2026-11-01
+## [1.3.3] - 2026-11-02
 
 ### Behavior changes
 - Policy arguments of `filtersql()` are keyword-only and unknown keyword
