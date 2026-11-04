@@ -2,7 +2,37 @@
 
 All notable changes to this project will be documented in this file.
 
-## [1.3.3] - 2026-11-02
+## [1.3.4] - 2026-11-04
+
+### Behavior changes
+- `filtersql()` takes the payload as its first argument and `dbms` is
+  required; both are explicit. The `**kwargs` are gone: payload fields can
+  no longer be passed as keywords, so `filtersql(payload, cursor=...)` raises
+  `TypeError`. Put `cursor`, `direction` and the other fields inside the
+  payload. 1.3.3 still accepted them as keywords; this closes the last
+  place where a keyword was merged into the payload.
+- Still not prevented: `filtersql(**client_dict)` binds a client key that
+  has the name of a real parameter (`scope`, `allowed_columns`, ...). Pass
+  the payload as one object.
+
+### Fixed
+- `parseDatatableArgs` skips non-string keys, and a `None` value is kept as
+  a leaf instead of being replaced by a dict when a longer key follows.
+- DataTables example: a client value of the wrong shape
+  (`columns[0][search]=x`, `order[0]=x`) returned a 500. Such entries are now
+  skipped, including an `order` entry with no `column` (it used to default
+  to column 0). Negative column indexes are skipped too.
+- A non-string `field` that is also falsy (`None`, `0`, `[]`, `{}`) in `order`,
+  in a `columns` dict or in a filter now reports `InvalidIdentifierError: ... must be a string`
+  instead of "missing field". A missing `field` key is still a
+  `ValidationError`.
+
+### Known limitations
+- Unknown keys inside the payload are ignored. A misspelled policy key there
+  (`{"allowed_column": ...}`) is not detected, while the correct spelling is
+  rejected. Policy belongs in named arguments, never in the payload.
+
+## [1.3.3] - 2026-11-01
 
 ### Behavior changes
 - Policy arguments of `filtersql()` are keyword-only and unknown keyword

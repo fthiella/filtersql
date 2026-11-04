@@ -61,7 +61,7 @@ Same call from a payload, which is what a DataTables backend or a model should h
 query, values = filtersql.filtersql(payload, dbms="pg", placeholder="%s")
 ```
 
-`filtersql(**payload)` is not the same call. A client dict splatted into keyword arguments can set `scope`, `allowed_columns` or `raw_source`. Pass the payload as the first argument and the policy as named arguments.
+`filtersql(**payload)` is not the same call. On an ordinary body it raises `TypeError`, but a client dict that contains a real parameter name (`scope`, `allowed_columns`, `raw_source`, `dbms`, ...) still binds it. A misspelled keyword (`allowed_column=`) raises `TypeError` instead of being ignored; a misspelled key *inside* the payload is ignored. Pass the payload as the first argument and the policy as named arguments.
 
 ## Don't let the model write SQL
 

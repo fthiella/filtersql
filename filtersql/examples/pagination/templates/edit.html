@@ -213,7 +213,7 @@
                         mi.className = "badge-mode";
                     }
 
-                    document.getElementById('debug_out').innerText = response.debug_sql + "\nParameters: " + JSON.stringify(response.debug_params);
+                    document.getElementById('debug_out').innerText = (response.debug_sql ? response.debug_sql + "\nParameters: " + JSON.stringify(response.debug_params) : "(set FILTERSQL_EXAMPLE_DEBUG=1 to show the generated SQL)");
                 } catch (err) {
                     alert("Network Error: " + err.message);
                 }
@@ -297,7 +297,7 @@
                         this.renderForm(this.currentRecord);
                     }
 
-                    document.getElementById('debug_out').innerText = response.debug_sql + "\nParameters: " + JSON.stringify(response.debug_params);
+                    document.getElementById('debug_out').innerText = (response.debug_sql ? response.debug_sql + "\nParameters: " + JSON.stringify(response.debug_params) : "(set FILTERSQL_EXAMPLE_DEBUG=1 to show the generated SQL)");
                 } catch (err) {
                     alert("Network Error: " + err.message);
                 }

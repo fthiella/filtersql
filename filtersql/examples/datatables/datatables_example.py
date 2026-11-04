@@ -69,12 +69,22 @@ def api_users():
     if length < 0:
         length = MAX_DT_LENGTH
 
+    # The parser never fails, but the client controls the shape: a value that
+    # should be a dict can arrive as a string. Anything else is ignored.
+    def _d(x):
+        return x if isinstance(x, dict) else {}
+
+    def _s(x):
+        return x.strip() if isinstance(x, str) else ''
+
     filters = []
-    for idx, col_data in dt.get('columns', {}).items():
-        search_value = col_data.get('search', {}).get('value', '').strip()
+    for idx, col_data in _d(dt.get('columns')).items():
+        search_value = _s(_d(_d(col_data).get('search')).get('value'))
         if not search_value:
             continue
         try:
+            if int(idx) < 0:
+                continue
             field = COLUMNS[int(idx)]['field']
         except (ValueError, IndexError):
             continue
@@ -84,7 +94,7 @@ def api_users():
             'value':    search_value,
         })
 
-    global_search = dt.get('search', {}).get('value', '').strip()
+    global_search = _s(_d(dt.get('search')).get('value'))
     if global_search:
         filters.append({
             'or': [
@@ -97,10 +107,16 @@ def api_users():
         })
 
     order = []
-    for _, ord_info in dt.get('order', {}).items():
+    for _, ord_info in _d(dt.get('order')).items():
+        ord_info = _d(ord_info)
+        if 'column' not in ord_info:
+            continue  # malformed entry: skip it, do not default to column 0
         try:
-            field = COLUMNS[int(ord_info.get('column', 0))]['field']
-        except (ValueError, IndexError):
+            col_idx = int(ord_info['column'])
+            if col_idx < 0:
+                continue
+            field = COLUMNS[col_idx]['field']
+        except (ValueError, TypeError, IndexError):
             continue
         direction = ord_info.get('dir', 'asc')
         if direction not in ('asc', 'desc'):

@@ -23,17 +23,27 @@ def test_misspelled_policy_argument_raises(bad):
         filtersql.filtersql(SEL, dbms="sqlite", **bad)
 
 
-def test_payload_fields_as_kwargs_still_work():
-    q, v = filtersql.filtersql(
-        {"action": "select", "source": "u", "columns": ["id"],
-         "order": [{"field": "id"}]},
-        dbms="pg", cursor={"id": 100}, direction="next")
-    assert "> %s" in q and v == [100]
-
-
-def test_splat_of_unknown_client_keys_raises():
+def test_payload_fields_as_kwargs_are_rejected():
     with pytest.raises(TypeError):
-        filtersql.filtersql(dbms="sqlite", **SEL, evil=1)
+        filtersql.filtersql({"action": "select", "source": "u", "columns": ["id"]},
+                            dbms="pg", cursor={"id": 1}, direction="next")
+
+
+def test_splat_of_client_keys_raises():
+    with pytest.raises(TypeError):
+        filtersql.filtersql(dbms="sqlite", **SEL)
+
+
+def test_payload_is_required_and_must_be_dict():
+    with pytest.raises(TypeError):
+        filtersql.filtersql(dbms="sqlite")
+    with pytest.raises(ValidationError):
+        filtersql.filtersql(None, dbms="sqlite")
+
+
+def test_dbms_is_required():
+    with pytest.raises(TypeError):
+        filtersql.filtersql(SEL)
 
 
 def test_dbms_is_keyword_only():
@@ -80,6 +90,8 @@ def test_filter_field_non_string(bad):
     ds = Datasource(source="u", dbms="sqlite")
     with pytest.raises(InvalidIdentifierError, match="must be a string"):
         ds.select(filters=[{"field": bad, "operator": "=", "value": 1}])
+    with pytest.raises(InvalidIdentifierError, match="must be a string"):
+        ds.select(columns=[{"field": bad}])
 
 
 def test_write_keys_non_string():
@@ -120,3 +132,59 @@ def test_dt_conflicting_keys_do_not_crash():
 def test_dt_unmatched_keys_are_skipped_silently(capsys):
     assert parseDatatableArgs({"foo": "1", "a[": "2"}) == {}
     assert capsys.readouterr().out == ""
+
+
+def test_dt_none_value_is_a_leaf_and_first_wins():
+    class D(dict):
+        pass
+    r = parseDatatableArgs(D({"a[0][b]": None, "a[0][b][c]": "x"}))
+    assert r["a"][0]["b"] is None
+
+
+def test_dt_non_string_keys_are_skipped():
+    assert parseDatatableArgs({5: "x", "draw": "1"}) == {"draw": "1"}
+
+
+@pytest.mark.parametrize("bad", [None, 0, [], {}])
+def test_falsy_non_string_fields_report_type(bad):
+    ds = Datasource(source="u", dbms="sqlite")
+    with pytest.raises(InvalidIdentifierError, match="must be a string"):
+        ds.select(columns=["a"], order=[{"field": bad}])
+    with pytest.raises(InvalidIdentifierError, match="must be a string"):
+        ds.select(filters=[{"field": bad, "operator": "=", "value": 1}])
+    with pytest.raises(InvalidIdentifierError, match="must be a string"):
+        ds.select(columns=[{"field": bad}])
+
+
+def test_missing_field_key_is_a_validation_error():
+    ds = Datasource(source="u", dbms="sqlite")
+    with pytest.raises(ValidationError, match="field"):
+        ds.select(columns=["a"], order=[{"order": "asc"}])
+    with pytest.raises(ValidationError, match="field"):
+        ds.select(filters=[{"operator": "=", "value": 1}])
+    with pytest.raises(ValidationError, match="field"):
+        ds.select(columns=[{"alias": "x"}])
+
+
+def test_columns_dict_field_empty_string_and_raw_unchanged():
+    ds = Datasource(source="u", dbms="sqlite")
+    with pytest.raises(InvalidIdentifierError, match="empty"):
+        ds.select(columns=[{"field": ""}])
+    raw = Datasource(source="u", dbms="sqlite", allow_raw_fields=True)
+    q, _ = raw.select(columns=[{"field": "count(*)", "raw": True, "alias": "n"}])
+    assert "count(*)" in q
+
+@pytest.mark.parametrize("raw", [False, True])
+@pytest.mark.parametrize("bad", [["a"], {"x": 1}, 5, None, 0, [], {}, ""])
+def test_column_dict_field_non_string_or_empty(raw, bad):
+    ds = Datasource(source="u", dbms="sqlite", allow_raw_fields=True)
+    with pytest.raises(InvalidIdentifierError):
+        ds.select(columns=[{"field": bad, "raw": raw}])
+
+
+@pytest.mark.parametrize("raw", [False, True])
+@pytest.mark.parametrize("bad", [["a"], {"x": 1}, 5, None, 0, [], {}, ""])
+def test_filter_field_non_string_or_empty(raw, bad):
+    ds = Datasource(source="u", dbms="sqlite", allow_raw_fields=True)
+    with pytest.raises(InvalidIdentifierError):
+        ds.select(filters=[{"field": bad, "operator": "=", "value": 1, "raw": raw}])

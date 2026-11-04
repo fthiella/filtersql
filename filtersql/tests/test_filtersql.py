@@ -1633,37 +1633,30 @@ class TestCursorViaFiltersqlFunction(unittest.TestCase):
         self.assertIn('"id" > %s', q)
         self.assertEqual(v, [100])
 
-    def test_cursor_via_kwargs(self):
+    def test_cursor_in_payload(self):
         q, v = sql.filtersql(
-            action='select',
-            source='users',
-            columns=['id', 'name'],
-            cursor={'id': 100},
-            direction='next',
-            order=[{'field': 'id', 'order': 'asc'}],
+            {
+                'action': 'select',
+                'source': 'users',
+                'columns': ['id', 'name'],
+                'cursor': {'id': 100},
+                'direction': 'next',
+                'order': [{'field': 'id', 'order': 'asc'}],
+            },
             dbms='pg'
         )
         self.assertIn('"id" > %s', q)
         self.assertEqual(v, [100])
 
-    def test_cursor_with_payload_and_kwargs(self):
+    def test_payload_fields_are_not_accepted_as_keywords(self):
         payload = {
             'action': 'select',
             'source': 'users',
             'columns': ['id', 'name'],
             'order': [{'field': 'id', 'order': 'asc'}]
         }
-        q, v = sql.filtersql(
-            payload,
-            cursor={'id': 100},
-            direction='next',
-            dbms='pg'
-        )
-        self.assertIn('"id" > %s', q)
-        self.assertEqual(v, [100])
-
-class TestColumnFeatures(unittest.TestCase):
-    """Test new column features: strings, alias, raw."""
+        with self.assertRaises(TypeError):
+            sql.filtersql(payload, cursor={'id': 100}, direction='next', dbms='pg')
 
     def test_columns_as_strings(self):
         ds = make_ds()

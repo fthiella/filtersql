@@ -417,11 +417,14 @@ class Datasource:
                 self._check_allowed_column(x)
                 parsed_columns.append(self._quote(x, quote_char))
             elif isinstance(x, dict):
-                field = x.get('field')
-                if not field:
+                if 'field' not in x:
                     raise ValidationError(f"Column dict missing 'field': {x}")
+                field = x.get('field')
+                self._require_identifier_str(field, "Column field")
 
                 if x.get('raw', False):
+                    if not field.strip():
+                        raise InvalidIdentifierError("Identifier cannot be empty.")
                     if self.allowed_columns is not None:
                         raise ValidationError(
                             "raw columns are not permitted when allowed_columns is set."
@@ -430,7 +433,7 @@ class Datasource:
                         raise ConfigurationError(
                             "raw columns/filters are disabled. Set allow_raw_fields=True to enable."
                         )
-                    raw_sql = str(field)
+                    raw_sql = field
                     alias = x.get('alias') or x.get('as')
                     if alias:
                         raw_sql += f" as {self._quote_write_target(alias, quote_char)}"
@@ -764,7 +767,7 @@ class Datasource:
             raise ValidationError(f"Expected list for 'order', got {type(order_list).__name__}")
         seen = set()
         for item in order_list:
-            if not isinstance(item, dict) or not item.get('field'):
+            if not isinstance(item, dict) or 'field' not in item:
                 raise ValidationError(f"Each item in 'order' must be a dict with a 'field' key: {item!r}")
             field = item['field']
             self._require_identifier_str(field, "Order field")
@@ -992,8 +995,9 @@ class Datasource:
 
         if not operator:
             raise ValidationError(f"Filter is missing required 'operator' key: {f}")
-        if not field:
+        if 'field' not in f:
             raise ValidationError(f"Filter is missing required 'field' key: {f}")
+        self._require_identifier_str(field, "Filter field")
 
         if operator in ('fts', 'fts_query') and self.dbms not in ('pg', 'mysql'):
             raise ValidationError(f"FTS operator not supported for {self.dbms}")
@@ -1142,7 +1146,10 @@ class Datasource:
 
         cast_suffix = ''
         if raw:
-            col_expr = str(col)
+            self._require_identifier_str(col, "Filter field")
+            if not col.strip():
+                raise InvalidIdentifierError("Identifier cannot be empty.")
+            col_expr = col
         else:
             col_expr = self._quote(col, quote_char)
             if (
@@ -1703,49 +1710,28 @@ class Datasource:
         limit_template = DBMS_MAP[kwargs["dbms"]].get("limit", "")
         return limit_template.format(start=start, length=length)
 
-# Payload fields that may also be passed as keyword arguments
-# (``filtersql(payload, cursor=..., direction=...)``). Anything else in
-# **kwargs is an error: a misspelled policy argument must never be absorbed
-# into the payload and ignored.
-_PAYLOAD_KWARGS = frozenset({
-    'action', 'source', 'columns', 'filters', 'group_by', 'having',
-    'order', 'limit', 'direction', 'cursor', 'values', 'id', 'returning',
-})
-
-def filtersql(payload=None, *, dbms=None, scope=None, raw_source=False,
-              allow_raw_source=False, allow_raw_fields=False,
-              allowed_columns=None, allowed_sources=None,
-              placeholder=None, fts_language=None, **kwargs) -> tuple[str, list]:
+def filtersql(
+    payload: dict,
+    *,
+    dbms: str,
+    scope: dict = None,
+    raw_source: bool = False,
+    allow_raw_source: bool = False,
+    allow_raw_fields: bool = False,
+    allowed_columns: set = None,
+    allowed_sources: set = None,
+    placeholder: str = None,
+    fts_language: str = None,
+) -> tuple[str, list]:
     """
     Build a query from a payload dict.
-
-    Server configuration (dbms, scope, allowlists, raw flags, placeholder,
-    fts_language) is keyword-only. Extra keyword arguments are accepted only
-    when they are payload fields (action, source, columns, filters,
-    group_by, having, order, limit, direction, cursor, values, id,
-    returning) and override the same key in `payload`. Any other name, such
-    as a misspelled ``allowed_column=``, raises TypeError instead of being
-    silently ignored (which would run the query without the allowlist).
-
-    The policy keys are also rejected when they appear inside `payload`.
-    They are not rejected when the client dict is unpacked
-    (`filtersql(**payload)` binds ``scope`` or ``allowed_columns`` as real
-    named arguments), so pass the payload as one object.
+    The payload must be passed explicitly as the first argument.
+    Server configuration is strictly keyword-only.
     """
-    unknown = sorted(set(kwargs) - _PAYLOAD_KWARGS)
-    if unknown:
-        raise TypeError(
-            f"filtersql() got unexpected keyword argument(s): {unknown}. "
-            f"Server configuration names: dbms, scope, raw_source, "
-            f"allow_raw_source, allow_raw_fields, allowed_columns, "
-            f"allowed_sources, placeholder, fts_language."
-        )
-
-    if payload is not None and not isinstance(payload, dict):
+    if not isinstance(payload, dict):
         raise ValidationError(f"Expected dict for 'payload', got {type(payload).__name__}")
 
-    data = (payload or {}).copy()
-    data.update(kwargs)
+    data = payload.copy()
 
     raw_action = data.get('action')
     if not raw_action or not isinstance(raw_action, str):

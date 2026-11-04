@@ -1,6 +1,6 @@
-# filtersql JSON Payload Specification (v1.3.3)
+# filtersql JSON Payload Specification (v1.3.4)
 
-**Version**: 1.3.3
+**Version**: 1.3.4
 
 This document defines the formal, language-agnostic JSON payload specification for **filtersql**. Any implementation of this protocol (whether written in Python, Node.js, Go, Rust, or any other language) must accept and validate payloads conforming to this standard.
 
@@ -290,7 +290,7 @@ The following parameters are **not** part of the payload. They are set by the ap
 
 When the placeholder contains `%` (the default on PostgreSQL and MySQL), every `%` the implementation splices into the SQL text — identifiers, JSONB keys, the FTS language — is written doubled (`%%`), because those drivers treat `%` as a format character. Bound values are not doubled; the driver does that. This is a driver concern, not a change to the payload.
 
-The reference `filtersql()` function rejects any of these keys when they appear **inside the payload object**. It cannot tell a named argument from a splat: `filtersql(**payload)` binds `scope`, `allow_raw_fields`, `allowed_columns` and the rest as real parameters and does not raise. Callers pass the payload as one object and the server configuration as named arguments: `filtersql(payload, dbms=..., scope=..., allowed_columns=...)`. Never unpack the client JSON into the call.
+The reference `filtersql()` function rejects any of these keys when they appear **inside the payload object**. It cannot tell a named argument from a splat. Since 1.3.4 `filtersql(**payload)` on an ordinary body raises `TypeError` (`action`, `source` and the other payload fields are not parameters), but a dict that contains a real parameter name (`payload`, `dbms`, `scope`, `allowed_columns`, ...) still binds it. Unknown keys inside the payload object are ignored, so a misspelled policy key there (`allowed_column`) is not detected. Callers pass the payload as one object and the server configuration as named arguments: `filtersql(payload, dbms=..., scope=..., allowed_columns=...)`. Never unpack the client JSON into the call.
 
 ---
 
