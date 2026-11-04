@@ -76,8 +76,12 @@ def api_gateway(source, action):
     
     try:
         # 3. Call filtersql with strict allowlists and scope enforcement
+        query_payload = dict(payload)
+        query_payload['action'] = action
+        query_payload['source'] = source
+
         query, params = filtersql(
-            {**payload, 'action': action, 'source': source},
+            query_payload,
             dbms='sqlite',
             allowed_columns=table_allowed_columns,
             scope={'tenant_id': DEFAULT_TENANT_ID}

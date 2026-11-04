@@ -4,33 +4,96 @@ All notable changes to this project will be documented in this file.
 
 ## [1.3.4] - 2026-11-04
 
-### Behavior changes
-- `filtersql()` takes the payload as its first argument and `dbms` is
-  required; both are explicit. The `**kwargs` are gone: payload fields can
-  no longer be passed as keywords, so `filtersql(payload, cursor=...)` raises
-  `TypeError`. Put `cursor`, `direction` and the other fields inside the
-  payload. 1.3.3 still accepted them as keywords; this closes the last
-  place where a keyword was merged into the payload.
-- Still not prevented: `filtersql(**client_dict)` binds a client key that
-  has the name of a real parameter (`scope`, `allowed_columns`, ...). Pass
-  the payload as one object.
+### Changed (breaking)
+- **`payload` is positional-only.** `filtersql(payload, /, *, dbms, ...)`
+  now enforces `payload` with `/`. Both `filtersql(payload={...})` and
+  `filtersql(**client_dict)` — where `client_dict` contains a
+  `"payload"` key plus policy keys — raise `TypeError`. This closes the
+  last variant of the dictionary-merging bypass: in 1.3.3 the merge was
+  already blocked for client dicts *without* a `"payload"` key, but a
+  client dict that happened to include one still had its `scope`,
+  `allowed_columns`, `dbms`, etc. silently bound to the server
+  arguments. Payload is now the one argument that cannot be a keyword.
+- **`**kwargs` are gone.** Payload fields must live inside the payload.
+  `filtersql(payload, cursor=..., direction=..., filters=...)` now
+  raises `TypeError`. 1.3.3 still accepted these as keyword arguments
+  (see the upgrade checklist below); 1.3.4 does not, because removing
+  `**kwargs` entirely is what closes the misspelled-policy bug that
+  1.3.3 could only narrow.
 
 ### Fixed
-- `parseDatatableArgs` skips non-string keys, and a `None` value is kept as
-  a leaf instead of being replaced by a dict when a longer key follows.
-- DataTables example: a client value of the wrong shape
-  (`columns[0][search]=x`, `order[0]=x`) returned a 500. Such entries are now
-  skipped, including an `order` entry with no `column` (it used to default
-  to column 0). Negative column indexes are skipped too.
-- A non-string `field` that is also falsy (`None`, `0`, `[]`, `{}`) in `order`,
-  in a `columns` dict or in a filter now reports `InvalidIdentifierError: ... must be a string`
-  instead of "missing field". A missing `field` key is still a
-  `ValidationError`.
+- **Raw field validation hardening.** Columns and filters with
+  `raw=True` bypassed the identifier type check and the empty-string
+  check (the old code did `str(field)` unconditionally). A raw column
+  `{"field": "", "raw": True}` produced `SELECT  ` (invalid SQL); a
+  raw column `{"field": 123, "raw": True}` produced `SELECT 123` and
+  succeeded by accident. Both columns and filters now validate the
+  field via `_require_identifier_str` and reject an empty or
+  whitespace-only string with `InvalidIdentifierError`, even when
+  `raw=True`. A non-string field raises `InvalidIdentifierError: ...
+  must be a string`, not `AttributeError`.
+- **Non-string, falsy `field` reports the right problem.** A filter,
+  order item, or column dict whose `field` was `None`, `0`, `[]` or
+  `{}` used to be reported as "Filter is missing required 'field'
+  key" — because the presence check was `not field`, which is true for
+  any falsy value. The key-presence check is now `'field' not in x`,
+  and the value check runs separately, so `{"field": 0}` reports
+  `InvalidIdentifierError: Column field must be a string, got int.`
+  A payload that actually omits the key still raises the
+  `ValidationError` for a missing key.
+- **`parseDatatableArgs` no longer raises on client input.**
+  `columns[²][data]` (`str.isdigit()` is true for `²` but `int()`
+  raises) and conflicting keys such as `a[0][b]` and `a[0][b][c]`
+  in the same query string raised `ValueError` / `TypeError` out of
+  the parser. Non-string keys are now skipped, conflicts are resolved
+  first-wins, and unmatched keys are dropped without the stray
+  `print()`. A `None` value is kept as a leaf rather than replaced by
+  a dict when a longer key follows.
+- **DataTables example: bad shapes return 400, not 500.** A client
+  sending `columns[0][search]=x` or `order[0]=x` (a string where the
+  example expected a dict) reached `.get()` on a non-dict and
+  returned 500. Such entries are skipped. An `order` entry with no
+  `column` is skipped too — it used to default to column 0 and sort
+  by the first column silently. Negative column indexes are skipped.
 
-### Known limitations
-- Unknown keys inside the payload are ignored. A misspelled policy key there
-  (`{"allowed_column": ...}`) is not detected, while the correct spelling is
-  rejected. Policy belongs in named arguments, never in the payload.
+### Tests
+- New coverage for `raw=True` with an empty, whitespace-only, and
+  non-string `field` in `columns` and in a filter, asserting
+  `InvalidIdentifierError` and no invalid SQL emitted.
+- New coverage for `filtersql(payload={...})` and for
+  `filtersql(**client_dict)` raising `TypeError`, and for
+  `filtersql(payload, cursor=...)` raising `TypeError` (the 1.3.3
+  call shape).
+- New coverage for `parseDatatableArgs` with non-digit column
+  indexes, conflicting keys, and a `None` value followed by a longer
+  key.
+
+### Notes
+- **Upgrade checklist (from 1.3.3):**
+  - `filtersql(payload, cursor={...})`, `filtersql(payload,
+    direction=...)`, `filtersql(payload, filters=...)` and the other
+    payload fields now raise `TypeError`. Move them into the payload:
+    `filtersql({**payload, "cursor": cursor}, dbms="pg")`.
+    In 1.3.3 those keys were whitelisted through `**kwargs`; in 1.3.4
+    they are not.
+  - `filtersql(payload={...})` (payload as keyword) now raises
+    `TypeError`. Use the positional form `filtersql({...})`.
+  - If your DataTables backend passed `columns[i]` values that are not
+    dicts, or an `order[i]` entry with no `column`, the example now
+    skips them instead of silently sorting by column 0 or returning
+    500. This is a data-quality improvement; if it hides a real
+    sorting bug in your frontend, add the missing `column` index
+    there.
+- **Version history.** The fail-open bug this release fully closes
+  was introduced in 1.3.2 and partially fixed in 1.3.3 the next day.
+  1.3.4 completes the fix by making `payload` positional-only and
+  dropping `**kwargs` entirely. The three releases should be treated
+  as a single step: any version ≥ 1.3.4 is the correct target.
+- **Not new in 1.3.4, but still a limit to know about:** unknown keys
+  *inside the payload* are silently ignored. A misspelled policy key
+  (`{"allowed_column": ...}`) is not detected; the correctly spelled
+  one is rejected. Policy belongs in named arguments, never in the
+  payload. See the README's "The rule" section.
 
 ## [1.3.3] - 2026-11-01
 

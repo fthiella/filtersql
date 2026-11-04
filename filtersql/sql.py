@@ -1712,6 +1712,7 @@ class Datasource:
 
 def filtersql(
     payload: dict,
+    /,
     *,
     dbms: str,
     scope: dict = None,

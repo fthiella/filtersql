@@ -327,7 +327,7 @@ class TestRawSourceAndAllowedSources:
         """The payload path must not bypass the allowlist."""
         with pytest.raises(ValidationError, match="not in allowed_sources"):
             filtersql(
-                payload={
+                {
                     "action": "select",
                     "source": "(select 1) leak",
                     "columns": ["id"],

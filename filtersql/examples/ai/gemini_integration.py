@@ -19,7 +19,7 @@ This is the honest security claim: we do not trust the model to be
 well-behaved; we trust the policy layer to reject what the model
 should not produce. See the questions at the bottom of the file.
 
-Requires: pip install "filtersql>=1.3.1" google-genai python-dotenv
+Requires: pip install "filtersql>=1.3.4" google-genai python-dotenv
 Run `python create_demo_db.py` first.
 """
 

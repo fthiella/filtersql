@@ -276,8 +276,8 @@ class TestFilterOperators(unittest.TestCase):
             q, v = self._where('nonexistent_op', 'foo')
 
     def test_fts_language_via_kwarg(self):
-        q, v = filtersql(
-            payload={
+        q, v = sql.filtersql(
+            {
                 'action': 'select',
                 'source': 'docs',
                 'filters': [{'field': 'tsv', 'operator': 'fts', 'value': 'contratti'}],
@@ -291,8 +291,8 @@ class TestFilterOperators(unittest.TestCase):
 
     def test_fts_language_rejected_from_payload(self):
         with self.assertRaises(ValidationError) as cm:
-            filtersql(
-                payload={
+            sql.filtersql(
+                {
                     'action': 'select',
                     'source': 'docs',
                     'fts_language': 'italian',
@@ -1171,7 +1171,7 @@ class TestFiltersqlFunction(unittest.TestCase):
 
     def test_select_action(self):
         q, v = sql.filtersql(
-            payload={
+            {
                 'action': 'select',
                 'source': 'users',
                 'columns': [{'field': 'id'}, {'field': 'first_name'}],
@@ -1187,7 +1187,7 @@ class TestFiltersqlFunction(unittest.TestCase):
 
     def test_insert_action(self):
         q, v = sql.filtersql(
-            payload={
+            {
                 'action': 'insert',
                 'source': 'users',
                 'values': {'first_name': 'John'},
@@ -1200,7 +1200,7 @@ class TestFiltersqlFunction(unittest.TestCase):
 
     def test_update_action(self):
         q, v = sql.filtersql(
-            payload={
+            {
                 'action': 'update',
                 'source': 'users',
                 'id': {'id': 42},
@@ -1215,7 +1215,7 @@ class TestFiltersqlFunction(unittest.TestCase):
 
     def test_delete_action(self):
         q, v = sql.filtersql(
-            payload={
+            {
                 'action': 'delete',
                 'source': 'users',
                 'id': {'id': 42},
@@ -1228,15 +1228,15 @@ class TestFiltersqlFunction(unittest.TestCase):
 
     def test_missing_source_raises(self):
         with self.assertRaises(ValidationError):
-            sql.filtersql(payload={'action': 'select'}, dbms='pg')
+            sql.filtersql({'action': 'select'}, dbms='pg')
 
     def test_invalid_action_raises(self):
         with self.assertRaises(ValidationError):
-            sql.filtersql(payload={'action': 'drop', 'source': 'users'}, dbms='pg')
+            sql.filtersql({'action': 'drop', 'source': 'users'}, dbms='pg')
 
     def test_scope_applied_via_function(self):
         q, v = sql.filtersql(
-            payload={
+            {
                 'action': 'select',
                 'source': 'users',
                 'columns': [{'field': 'id'}],
@@ -1250,7 +1250,7 @@ class TestFiltersqlFunction(unittest.TestCase):
 
     def test_case_insensitive_action(self):
         q, v = sql.filtersql(
-            payload={
+            {
                 'action': 'SELECT',
                 'source': 'users',
                 'columns': [{'field': 'id'}],
@@ -1619,7 +1619,7 @@ class TestCursorViaFiltersqlFunction(unittest.TestCase):
 
     def test_cursor_via_payload(self):
         q, v = sql.filtersql(
-            payload={
+            {
                 'action': 'select',
                 'source': 'users',
                 'columns': ['id', 'name'],
